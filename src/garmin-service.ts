@@ -64,6 +64,30 @@ export interface RunningStats {
   fastestPace: string; // formatted as MM:SS per km
 }
 
+export interface FitnessMetrics {
+  vo2Max?: number;
+  fitnessAge?: number;
+  lactateThreshold?: {
+    heartRate?: number;
+    pace?: string; // formatted as MM:SS per km
+  };
+  functionalThresholdPower?: number; // FTP in watts
+  restingHeartRate?: number;
+  maxHeartRate?: number;
+  lastMeasuredDate?: string;
+}
+
+export interface HistoricRunsQuery {
+  startDate: string; // YYYY-MM-DD format
+  endDate: string; // YYYY-MM-DD format
+  activityType?: "all" | "running" | "trail_running" | "treadmill_running" | "track_running";
+  minDistance?: number; // in km
+  maxDistance?: number; // in km
+  minDuration?: number; // in seconds
+  maxDuration?: number; // in seconds
+  limit?: number; // max number of results
+}
+
 const RUNNING_ACTIVITY_TYPES = ["running", "track_running", "treadmill_running", "trail_running"];
 
 export class GarminService {
@@ -141,7 +165,7 @@ export class GarminService {
     return RUNNING_ACTIVITY_TYPES.includes(activity.activityType?.typeKey);
   }
 
-  async getRecentActivities(limit: number = 10): Promise<any[]> {
+  async getRecentActivities(limit: number = 10): Promise<RunWorkout[]> {
     await this.ensureAuthenticated();
 
     try {
@@ -150,7 +174,15 @@ export class GarminService {
         return await this.garminConnect.getActivities(0, limit);
       });
       console.error(`Successfully fetched ${activities.length} activities`);
-      return activities;
+
+      // Filter for running activities and map to RunWorkout format
+      const runningActivities = activities
+        .filter((activity: any) => this.isRunningActivity(activity))
+        .slice(0, limit)
+        .map((activity: any) => this.mapToRunWorkout(activity));
+
+      console.error(`Found ${runningActivities.length} running activities`);
+      return runningActivities;
     } catch (error) {
       console.error(`Failed to fetch activities: ${error}`);
       throw new Error(`Failed to fetch activities: ${error}`);
@@ -202,9 +234,39 @@ export class GarminService {
         }`
       );
 
-      const activities = await this.garminConnect.getActivities(0, 200);
+      // Use the same pagination approach as getHistoricRuns
+      const daysDiff = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+      const estimatedActivities = Math.max(200, Math.min(daysDiff * 2, 1000));
 
-      const runningActivities = activities.filter((activity: any) => {
+      let allActivities: any[] = [];
+      let offset = 0;
+      const batchSize = 200;
+      let consecutiveEmptyBatches = 0;
+
+      while (allActivities.length < estimatedActivities && consecutiveEmptyBatches < 3) {
+        const batchActivities = await this.silentCall(async () => {
+          return await this.garminConnect.getActivities(offset, batchSize);
+        });
+
+        if (!batchActivities || batchActivities.length === 0) {
+          consecutiveEmptyBatches++;
+          break;
+        }
+
+        consecutiveEmptyBatches = 0;
+        allActivities.push(...batchActivities);
+
+        // Check if we've gone past our start date
+        const oldestActivityInBatch = batchActivities[batchActivities.length - 1];
+        if (oldestActivityInBatch && new Date(oldestActivityInBatch.startTimeLocal) < startDate) {
+          break;
+        }
+
+        offset += batchSize;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      const runningActivities = allActivities.filter((activity: any) => {
         const activityDate = new Date(activity.startTimeLocal);
         return this.isRunningActivity(activity) && activityDate >= startDate && activityDate <= endDate;
       });
@@ -217,6 +279,418 @@ export class GarminService {
     } catch (error) {
       console.error("Error fetching running stats:", error);
       throw new Error("Failed to fetch running statistics from Garmin Connect");
+    }
+  }
+
+  async getFitnessMetrics(): Promise<FitnessMetrics> {
+    await this.ensureAuthenticated();
+
+    try {
+      console.error("Fetching fitness metrics from Garmin Connect...");
+
+      // Get user profile which contains some fitness metrics
+      const userProfile = await this.silentCall(async () => {
+        return await this.garminConnect.getUserProfile();
+      });
+
+      // Get user settings which may contain additional data
+      const userSettings = await this.silentCall(async () => {
+        return await this.garminConnect.getUserSettings();
+      });
+
+      console.error("User profile data:", JSON.stringify(userProfile, null, 2));
+      console.error("User settings data:", JSON.stringify(userSettings, null, 2));
+
+      // Try to get heart rate data which includes resting HR
+      let heartRateData = null;
+      try {
+        heartRateData = await this.silentCall(async () => {
+          return await this.garminConnect.getHeartRate();
+        });
+        console.error("Heart rate data:", JSON.stringify(heartRateData, null, 2));
+      } catch (error) {
+        console.error("Could not fetch heart rate data:", error);
+      }
+
+      // Look for VO2 Max in recent activities (some devices report it there)
+      let recentActivities = [];
+      try {
+        recentActivities = await this.silentCall(async () => {
+          return await this.garminConnect.getActivities(0, 10);
+        });
+        console.error("Recent activities sample for VO2 Max data:");
+        recentActivities.forEach((activity: any, index: number) => {
+          if (activity.vO2MaxValue) {
+            console.error(`Activity ${index}: VO2 Max = ${activity.vO2MaxValue}`);
+          }
+        });
+      } catch (error) {
+        console.error("Could not fetch recent activities:", error);
+      }
+
+      // Extract metrics from available data
+      const metrics: FitnessMetrics = {
+        vo2Max:
+          userSettings?.userData?.vo2MaxRunning ||
+          recentActivities.find((a: any) => a.vO2MaxValue)?.vO2MaxValue ||
+          undefined,
+        fitnessAge: undefined, // Not available in current API
+        restingHeartRate:
+          heartRateData?.restingHeartRate || heartRateData?.lastSevenDaysAvgRestingHeartRate || undefined,
+        maxHeartRate: undefined, // Would need to be calculated from activities or user settings
+        lactateThreshold: {
+          heartRate: userSettings?.userData?.lactateThresholdHeartRate || undefined,
+          pace: userSettings?.userData?.lactateThresholdSpeed
+            ? this.formatPace(userSettings.userData.lactateThresholdSpeed)
+            : undefined,
+        },
+        functionalThresholdPower: undefined, // Not available in current API structure
+        lastMeasuredDate: new Date().toISOString().split("T")[0],
+      };
+
+      console.error("Extracted fitness metrics:", JSON.stringify(metrics, null, 2));
+
+      // Clean up lactate threshold if no data
+      if (!metrics.lactateThreshold?.heartRate && !metrics.lactateThreshold?.pace) {
+        delete metrics.lactateThreshold;
+      }
+
+      console.error("Successfully fetched fitness metrics");
+      return metrics;
+    } catch (error) {
+      console.error("Error fetching fitness metrics:", error);
+      throw new Error(`Failed to fetch fitness metrics: ${error}`);
+    }
+  }
+
+  async getHistoricRuns(query: HistoricRunsQuery): Promise<RunWorkout[]> {
+    await this.ensureAuthenticated();
+
+    try {
+      const startDate = new Date(query.startDate);
+      const endDate = new Date(query.endDate);
+      const limit = query.limit || 100;
+
+      console.error(`Fetching historic runs from ${query.startDate} to ${query.endDate} with limit ${limit}`);
+
+      // First, get the total count of activities to understand how much data we have
+      let totalActivities = 0;
+      try {
+        const activityCount = await this.silentCall(async () => {
+          return await this.garminConnect.countActivities();
+        });
+        totalActivities = activityCount.countOfActivities;
+        console.error(`Total activities in account: ${totalActivities}`);
+      } catch (error) {
+        console.error("Could not get activity count, proceeding with estimation");
+        totalActivities = 10000; // Conservative estimate
+      }
+
+      // Calculate intelligent batch strategy
+      const daysDiff = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+      console.error(`Date range spans ${daysDiff} days`);
+
+      // For very old data, we may need to fetch a large portion of the total activities
+      // Use a more aggressive strategy for historical data
+      const maxBatchesToFetch = Math.min(Math.ceil(totalActivities / 200), 50); // Max 50 batches (10,000 activities)
+      console.error(`Will fetch up to ${maxBatchesToFetch} batches if needed to reach ${query.startDate}`);
+
+      let allActivities: any[] = [];
+      let start = 0;
+      const batchSize = 200;
+      let consecutiveEmptyBatches = 0;
+      let foundActivitiesInRange = 0;
+      let reachedTargetDate = false;
+
+      for (let batchNum = 1; batchNum <= maxBatchesToFetch && !reachedTargetDate; batchNum++) {
+        console.error(`Fetching batch ${batchNum}/${maxBatchesToFetch}, start: ${start}, batch size: ${batchSize}`);
+
+        const batchActivities = await this.silentCall(async () => {
+          return await this.garminConnect.getActivities(start, batchSize);
+        });
+
+        if (!batchActivities || batchActivities.length === 0) {
+          consecutiveEmptyBatches++;
+          console.error(`Empty batch received (${consecutiveEmptyBatches}/3)`);
+          if (consecutiveEmptyBatches >= 3) {
+            console.error("Multiple empty batches, stopping pagination");
+            break;
+          }
+          start += batchSize;
+          continue;
+        }
+
+        consecutiveEmptyBatches = 0;
+        console.error(`Received ${batchActivities.length} activities in batch ${batchNum}`);
+
+        // Check the date range of this batch
+        const newestActivity = batchActivities[0];
+        const oldestActivity = batchActivities[batchActivities.length - 1];
+        const newestDate = new Date(newestActivity.startTimeLocal);
+        const oldestDate = new Date(oldestActivity.startTimeLocal);
+
+        console.error(
+          `Batch ${batchNum} date range: ${oldestDate.toISOString().split("T")[0]} to ${
+            newestDate.toISOString().split("T")[0]
+          }`
+        );
+
+        // Check if any activities in this batch are within our target date range
+        const activitiesInRange = batchActivities.filter((activity: any) => {
+          const activityDate = new Date(activity.startTimeLocal);
+          return activityDate >= startDate && activityDate <= endDate;
+        });
+
+        foundActivitiesInRange += activitiesInRange.length;
+        allActivities.push(...batchActivities);
+
+        console.error(
+          `Found ${activitiesInRange.length} activities in target date range in this batch (total so far: ${foundActivitiesInRange})`
+        );
+
+        // Check if we've reached activities older than our start date
+        if (oldestDate < startDate) {
+          console.error(`Reached activities older than ${query.startDate}, we have gone far enough back`);
+          reachedTargetDate = true;
+          break;
+        }
+
+        // If we have enough activities in our target range, we can be more selective
+        if (foundActivitiesInRange >= limit && activitiesInRange.length === 0) {
+          console.error(
+            `Have enough activities (${foundActivitiesInRange}) and current batch has no target activities, stopping`
+          );
+          break;
+        }
+
+        start += batchSize;
+
+        // Progressive delay - longer delays for larger batches to be respectful to API
+        const delay = Math.min(100 + batchNum * 50, 500); // 100ms to 500ms
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+
+      console.error(
+        `Completed pagination: fetched ${allActivities.length} total activities across ${Math.ceil(
+          start / batchSize
+        )} batches`
+      );
+      console.error(`Found ${foundActivitiesInRange} activities in target date range`);
+
+      // Filter activities based on the query parameters
+      const filteredActivities = allActivities.filter((activity: any) => {
+        const activityDate = new Date(activity.startTimeLocal);
+
+        // Date range filter
+        if (activityDate < startDate || activityDate > endDate) {
+          return false;
+        }
+
+        // Activity type filter
+        if (query.activityType && query.activityType !== "all") {
+          if (query.activityType === "running") {
+            if (!this.isRunningActivity(activity)) return false;
+          } else {
+            if (activity.activityType?.typeKey !== query.activityType) return false;
+          }
+        } else {
+          // Default to running activities only if no specific type requested
+          if (!this.isRunningActivity(activity)) return false;
+        }
+
+        const distanceKm = (activity.distance || 0) / 1000;
+        const durationSeconds = activity.duration || activity.movingDuration || 0;
+
+        // Distance filters
+        if (query.minDistance && distanceKm < query.minDistance) return false;
+        if (query.maxDistance && distanceKm > query.maxDistance) return false;
+
+        // Duration filters
+        if (query.minDuration && durationSeconds < query.minDuration) return false;
+        if (query.maxDuration && durationSeconds > query.maxDuration) return false;
+
+        return true;
+      });
+
+      // Sort by date (newest first) and limit results
+      const sortedActivities = filteredActivities
+        .sort((a: any, b: any) => new Date(b.startTimeLocal).getTime() - new Date(a.startTimeLocal).getTime())
+        .slice(0, limit);
+
+      const runWorkouts = sortedActivities.map((activity: any) => this.mapToRunWorkout(activity));
+
+      console.error(`Final result: ${runWorkouts.length} historic runs matching all criteria`);
+      if (runWorkouts.length > 0) {
+        const oldestRun = runWorkouts[runWorkouts.length - 1];
+        const newestRun = runWorkouts[0];
+        console.error(`Date range of results: ${oldestRun.date} to ${newestRun.date}`);
+      }
+
+      return runWorkouts;
+    } catch (error) {
+      console.error("Error fetching historic runs:", error);
+      throw new Error(`Failed to fetch historic runs: ${error}`);
+    }
+  }
+
+  async getRunsByDateRange(startDate: string, endDate: string, limit: number = 50): Promise<RunWorkout[]> {
+    return this.getHistoricRuns({
+      startDate,
+      endDate,
+      activityType: "running",
+      limit,
+    });
+  }
+
+  async getAllHistoricalRuns(startYear: number = 2020, limit: number = 1000): Promise<RunWorkout[]> {
+    await this.ensureAuthenticated();
+
+    try {
+      const endDate = new Date();
+      const startDate = new Date(startYear, 0, 1); // January 1st of startYear
+
+      console.error(`Fetching ALL historical runs from ${startYear} to ${endDate.getFullYear()}, limit: ${limit}`);
+      console.error(`This may take a while as we scan years of data...`);
+
+      // For historical data spanning multiple years, we need to be very aggressive
+      const yearsDiff = endDate.getFullYear() - startYear;
+      console.error(`Scanning ${yearsDiff} years of data`);
+
+      // Calculate a reasonable maximum based on years - assume more activities for older ranges
+      let maxActivitiesToScan: number;
+      if (yearsDiff >= 3) {
+        maxActivitiesToScan = 15000; // Scan up to 15k activities for 3+ years
+      } else if (yearsDiff >= 2) {
+        maxActivitiesToScan = 10000; // 10k for 2+ years
+      } else {
+        maxActivitiesToScan = 5000; // 5k for recent years
+      }
+
+      console.error(`Will scan up to ${maxActivitiesToScan} activities to find historical data from ${startYear}`);
+
+      let allActivities: any[] = [];
+      let start = 0;
+      const batchSize = 200;
+      let consecutiveEmptyBatches = 0;
+      let totalBatches = 0;
+      let reachedTargetYear = false;
+
+      const maxBatches = Math.ceil(maxActivitiesToScan / batchSize);
+
+      while (start < maxActivitiesToScan && consecutiveEmptyBatches < 5 && !reachedTargetYear) {
+        totalBatches++;
+        console.error(`Fetching batch ${totalBatches}/${maxBatches}, start: ${start}...`);
+
+        const batchActivities = await this.silentCall(async () => {
+          return await this.garminConnect.getActivities(start, batchSize);
+        });
+
+        if (!batchActivities || batchActivities.length === 0) {
+          consecutiveEmptyBatches++;
+          console.error(`Empty batch received (${consecutiveEmptyBatches}/5)`);
+          if (consecutiveEmptyBatches >= 5) {
+            console.error("Too many empty batches, stopping");
+            break;
+          }
+          start += batchSize;
+          continue;
+        }
+
+        consecutiveEmptyBatches = 0;
+        allActivities.push(...batchActivities);
+
+        // Check the oldest activity in this batch
+        const oldestActivityInBatch = batchActivities[batchActivities.length - 1];
+        const oldestDate = new Date(oldestActivityInBatch.startTimeLocal);
+
+        console.error(
+          `Batch ${totalBatches}: ${batchActivities.length} activities, oldest: ${
+            oldestDate.toISOString().split("T")[0]
+          }`
+        );
+
+        // If we've reached activities older than our start year, we can stop
+        if (oldestDate.getFullYear() < startYear) {
+          console.error(
+            `Reached activities from ${oldestDate.getFullYear()}, stopping as we've gone past ${startYear}`
+          );
+          reachedTargetYear = true;
+          break;
+        }
+
+        start += batchSize;
+
+        // Progressive delay based on how much data we're fetching
+        const delayMs = Math.min(200 + totalBatches * 25, 1000); // 200ms to 1000ms
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+        // Progress update every 10 batches for long-running scans
+        if (totalBatches % 10 === 0) {
+          console.error(`Progress: scanned ${allActivities.length} activities across ${totalBatches} batches`);
+        }
+      }
+
+      console.error(
+        `Completed historical scan: fetched ${allActivities.length} total activities from ${totalBatches} batches`
+      );
+
+      // Filter for running activities within date range
+      const runningActivities = allActivities.filter((activity: any) => {
+        const activityDate = new Date(activity.startTimeLocal);
+        return this.isRunningActivity(activity) && activityDate >= startDate && activityDate <= endDate;
+      });
+
+      console.error(`Found ${runningActivities.length} running activities in the ${startYear} onwards period`);
+
+      // Sort by date (newest first) and limit results
+      const sortedActivities = runningActivities
+        .sort((a: any, b: any) => new Date(b.startTimeLocal).getTime() - new Date(a.startTimeLocal).getTime())
+        .slice(0, limit);
+
+      const runWorkouts = sortedActivities.map((activity: any) => this.mapToRunWorkout(activity));
+
+      console.error(`Final result: ${runWorkouts.length} historical runs from ${startYear} onwards`);
+
+      if (runWorkouts.length > 0) {
+        const oldestRun = runWorkouts[runWorkouts.length - 1];
+        const newestRun = runWorkouts[0];
+        console.error(`Date range of results: ${oldestRun.date} to ${newestRun.date}`);
+
+        // Group by year to show distribution
+        const yearCounts: { [year: string]: number } = {};
+        runWorkouts.forEach((run) => {
+          const year = run.date.split("-")[0];
+          yearCounts[year] = (yearCounts[year] || 0) + 1;
+        });
+        console.error(`Distribution by year: ${JSON.stringify(yearCounts)}`);
+
+        // Debug: Show sample of older runs to see if we have 2022 data
+        const olderRuns = runWorkouts.filter((run) => parseInt(run.date.split("-")[0]) <= 2022);
+        if (olderRuns.length > 0) {
+          console.error(`✅ Found ${olderRuns.length} runs from 2022 or earlier!`);
+          console.error(
+            `Sample 2022 runs: ${olderRuns
+              .slice(0, 3)
+              .map((r) => `${r.date} ${r.distance}km`)
+              .join(", ")}`
+          );
+        } else {
+          console.error(`❌ No runs found from 2022 or earlier in final results`);
+          // Debug the sorting - let's check what the oldest runs actually are
+          const oldestFew = runWorkouts.slice(-5);
+          console.error(`Oldest 5 runs in results: ${oldestFew.map((r) => `${r.date} ${r.distance}km`).join(", ")}`);
+        }
+      } else {
+        console.error(`❌ No historical runs found from ${startYear}. This could mean:`);
+        console.error(`  • No running data exists in your account from ${startYear}`);
+        console.error(`  • Data is beyond the ${maxActivitiesToScan} activities we scanned`);
+        console.error(`  • Try increasing the scan range or checking Garmin Connect directly`);
+      }
+
+      return runWorkouts;
+    } catch (error) {
+      console.error("Error fetching all historical runs:", error);
+      throw new Error(`Failed to fetch historical runs: ${error}`);
     }
   }
 
