@@ -1,52 +1,43 @@
 # Garmin MCP Server
 
-A Model Context Protocol (MCP) server that provides access to your **real Garmin running workout data** for use with Claude Desktop and other MCP-compatible applications.
-
-## Features
-
-- 📊 **Real Garmin Data**: Connects directly to Garmin Connect to fetch your actual running data
-- 🏃‍♂️ **Running Analytics**: Get recent runs, detailed workout data, and running statistics
-- 🔐 **Secure Authentication**: Uses your Garmin Connect credentials stored locally
-- 📈 **Performance Analysis**: AI-powered running performance analysis prompts
-- 🎯 **MCP Compatible**: Works with Claude Desktop and other MCP clients
-
-## What You Can Do
-
-- Ask Claude about your recent runs and performance trends
-- Get detailed analysis of specific workouts
-- Track your running progress over time
-- Receive personalized running insights and recommendations
+🏃‍♂️ A Model Context Protocol (MCP) server that connects Claude Desktop to your **real Garmin Connect running data**.
 
 ## Quick Start
 
-### 1. Setup Garmin Credentials
+### 1. Prerequisites
+- Node.js 18+
+- Active Garmin Connect account with running data
+- Claude Desktop
+
+### 2. Setup
 
 ```bash
-# Copy the environment template
-cp .env.example .env
-
-# Edit .env and add your Garmin Connect credentials
-GARMIN_USERNAME=your-garmin-email@example.com
-GARMIN_PASSWORD=your-garmin-password
-```
-
-### 2. Build and Test
-
-```bash
-# Install dependencies and build
+# Clone and install
+git clone <your-repo-url>
+cd ai-run-coach
 npm install
-npm run build
 
-# Test with MCP Inspector
-npx @modelcontextprotocol/inspector node dist/index.js
+# Configure your Garmin credentials
+cp .env.example .env
+# Edit .env and add your Garmin Connect email and password
 ```
 
-### 3. Add to Claude Desktop
+### 3. Test the Connection
 
-Add this configuration to your Claude Desktop MCP settings:
+```bash
+# Build and test
+npm run build
+npm start
+```
+
+You should see:
+```
+Garmin MCP Server running on stdio
+```
+
+### 4. Add to Claude Desktop
 
 #### macOS
-
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
@@ -54,10 +45,10 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "garmin-mcp-server": {
       "command": "node",
-      "args": ["/path/to/your/ai-run-coach/dist/index.js"],
+      "args": ["/absolute/path/to/ai-run-coach/dist/index.js"],
       "env": {
-        "GARMIN_USERNAME": "your-garmin-email@example.com",
-        "GARMIN_PASSWORD": "your-garmin-password"
+        "GARMIN_USERNAME": "your-email@example.com",
+        "GARMIN_PASSWORD": "your-password"
       }
     }
   }
@@ -65,154 +56,87 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```
 
 #### Windows
+Edit `%APPDATA%\Claude\claude_desktop_config.json` with the same configuration.
 
-Edit `%APPDATA%\Claude\claude_desktop_config.json`:
+### 5. Start Using with Claude!
 
-```json
-{
-  "mcpServers": {
-    "garmin-mcp-server": {
-      "command": "node",
-      "args": ["C:\\path\\to\\your\\ai-run-coach\\dist\\index.js"],
-      "env": {
-        "GARMIN_USERNAME": "your-garmin-email@example.com",
-        "GARMIN_PASSWORD": "your-garmin-password"
-      }
-    }
-  }
-}
-```
+Ask Claude questions like:
+- "Show me my recent running workouts"
+- "What's my average pace this month?"
+- "Analyze my running performance"
+- "How far did I run this week?"
+
+## Features
+
+✅ **Real Garmin Data** - Connects directly to Garmin Connect  
+✅ **Recent Runs** - Get your latest workouts with pace, distance, heart rate  
+✅ **Detailed Analysis** - Heart rate zones, splits, elevation data  
+✅ **Running Statistics** - Weekly, monthly, quarterly, and yearly stats  
+✅ **AI Analysis** - Performance insights and training recommendations  
 
 ## Available Tools
 
-### 🏃‍♂️ get-recent-runs
+| Tool | Description | Example Usage |
+|------|-------------|---------------|
+| `get-recent-runs` | Get your latest running workouts | "Show my last 5 runs" |
+| `get-run-details` | Detailed data for a specific run | "Get details for run ID 12345" |
+| `get-running-stats` | Aggregate statistics for time periods | "Show my monthly running stats" |
 
-Get your latest running workouts from Garmin Connect.
+## What Data You Get
 
-- **Input**: `limit` (optional, default: 10)
-- **Output**: List of recent runs with distance, time, pace, calories, heart rate
-
-### 📊 get-run-details
-
-Get detailed information about a specific run.
-
-- **Input**: `runId` (from recent runs)
-- **Output**: Detailed run data including splits, elevation, heart rate zones
-
-### 📈 get-running-stats
-
-Get aggregated running statistics for a time period.
-
-- **Input**: `period` (week/month/quarter/year), `date` (optional)
-- **Output**: Total distance, average pace, best times, trends
-
-## Available Resources
-
-### 📄 recent-runs
-
-Access your recent running data as a structured resource for analysis.
-
-## Available Prompts
-
-### 🤖 analyze-running-performance
-
-AI-powered analysis of your running performance with personalized insights and recommendations.
-
-## Data Sources
-
-This server connects to **real Garmin Connect data**:
-
-- ✅ Fetches actual workouts from your Garmin device
-- ✅ Includes real heart rate, pace, and GPS data
-- ✅ Provides authentic performance metrics
-- ✅ Updates automatically as you sync new workouts
-
-## Security & Privacy
-
-- 🔒 Credentials stored locally in `.env` file
-- 🏠 All processing happens on your local machine
-- 🚫 No data sent to third-party services
-- 🔐 Direct authentication with Garmin Connect only
-
-## Example Usage
-
-Once configured, you can ask Claude questions like:
-
-- "Show me my recent running workouts"
-- "What are my running statistics for this month?"
-- "Analyze my running performance and give me training recommendations"
-- "Get details about my latest run"
-- "How has my pace improved over the last quarter?"
-
-## Detailed Setup
-
-For complete setup instructions including troubleshooting, see [GARMIN_SETUP.md](./GARMIN_SETUP.md).
+From your actual Garmin device:
+- 📏 **Distance & Time** - Exact measurements from GPS
+- ❤️ **Heart Rate** - Average, max, and zone data
+- 🏃‍♂️ **Pace** - Real pace per kilometer/mile
+- 📈 **Elevation** - Elevation gain from barometric data
+- 📊 **Splits** - Kilometer/mile splits with individual paces
+- 📍 **Location** - GPS coordinates or location names
 
 ## Development
 
-### Running in Development Mode
-
 ```bash
+# Development mode (auto-reload)
 npm run dev
-```
 
-### Building
-
-```bash
+# Build for production  
 npm run build
-```
 
-### Testing with MCP Inspector
-
-```bash
+# Test with MCP Inspector
 npx @modelcontextprotocol/inspector node dist/index.js
 ```
 
-## Requirements
-
-- Node.js 18+
-- Active Garmin Connect account
-- Garmin device that syncs to Garmin Connect
-- Recent running activities in your Garmin Connect account
-
 ## Troubleshooting
 
-### Common Issues
+### Authentication Issues
+- ✅ Verify credentials in `.env` file
+- ✅ Ensure you can log into connect.garmin.com manually
+- ✅ Disable 2FA on Garmin Connect (not supported)
 
-**Authentication Errors**:
+### No Data Found
+- ✅ Sync your Garmin device recently
+- ✅ Check you have running activities (not just other workouts)
+- ✅ Verify activities appear in Garmin Connect web
 
-- Verify credentials in `.env` file
-- Ensure no 2FA is enabled on Garmin Connect
-- Check you can log in to connect.garmin.com manually
+### Connection Problems
+- ✅ Check internet connection
+- ✅ Ensure Garmin Connect is not experiencing outages
+- ✅ Try again after a few minutes
 
-**No Data Returned**:
+## Security
 
-- Ensure your Garmin device has synced recently
-- Check you have running activities in Garmin Connect
-- Make sure activities are marked as "running" type
+🔒 **Your data stays private:**
+- Credentials stored locally in `.env`
+- Direct connection to Garmin Connect only
+- No third-party data sharing
+- All processing on your machine
 
-See [GARMIN_SETUP.md](./GARMIN_SETUP.md) for detailed troubleshooting.
+## Requirements
 
-## Alternative API Options
+- **Node.js 18+**
+- **Garmin Connect account** with running activities
+- **Garmin device** that syncs to Garmin Connect
+- **Claude Desktop** for MCP integration
 
-For production applications, consider:
+---
 
-- **Garmin Connect IQ API**: Official developer API
-- **Garmin Health API**: For health/fitness applications
-- **Garmin Developer Program**: https://developer.garmin.com/
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## License
-
-MIT License - see LICENSE file for details.
-
-## Disclaimer
-
-This project is not affiliated with Garmin Ltd. Garmin is a trademark of Garmin Ltd. or its subsidiaries.
+**Note:** This project is not affiliated with Garmin Ltd.

@@ -1,9 +1,25 @@
 import pkg from "garmin-connect";
 const { GarminConnect } = pkg;
-import * as dotenv from "dotenv";
+import fs from "fs";
+import path from "path";
 
-// Load environment variables
-dotenv.config();
+// Manually load environment variables to avoid dotenv output
+try {
+  const envPath = path.join(process.cwd(), ".env");
+  if (fs.existsSync(envPath)) {
+    const envFile = fs.readFileSync(envPath, "utf8");
+    const envVars = envFile.split("\n").filter((line) => line.trim() && !line.startsWith("#"));
+    envVars.forEach((line) => {
+      const [key, ...valueParts] = line.split("=");
+      if (key && valueParts.length > 0) {
+        const value = valueParts.join("=").trim();
+        process.env[key.trim()] = value;
+      }
+    });
+  }
+} catch (error) {
+  // Silent fallback if .env reading fails
+}
 
 export interface RunWorkout {
   id: string;
@@ -20,7 +36,6 @@ export interface RunWorkout {
 export interface DetailedRunWorkout extends RunWorkout {
   elevationGain?: number; // in meters
   temperature?: number; // in Celsius
-  weather?: string;
   startLocation?: string;
   route?: boolean;
   heartRateZones?: string;
@@ -45,68 +60,100 @@ export interface RunningStats {
   totalCalories: number;
   avgHeartRate?: number;
   maxHeartRate?: number;
-  comparison?: string;
   longestRun: number; // in km
   fastestPace: string; // formatted as MM:SS per km
 }
 
+const RUNNING_ACTIVITY_TYPES = ["running", "track_running", "treadmill_running", "trail_running"];
+
 export class GarminService {
   private garminConnect: any;
-  private isAuthenticated: boolean = false;
-  private lastAuthTime: number = 0;
+  private isAuthenticated = false;
+  private lastAuthTime = 0;
   private readonly authTimeout = 30 * 60 * 1000; // 30 minutes
 
   constructor() {
-    this.garminConnect = new GarminConnect({
-      username: process.env.GARMIN_USERNAME || "",
-      password: process.env.GARMIN_PASSWORD || "",
-    });
+    const username = process.env.GARMIN_USERNAME;
+    const password = process.env.GARMIN_PASSWORD;
+
+    if (!username || !password) {
+      throw new Error("GARMIN_USERNAME and GARMIN_PASSWORD must be set in environment variables");
+    }
+
+    this.garminConnect = new GarminConnect({ username, password });
+  }
+
+  // Helper method to suppress console output during external library calls
+  // This prevents garmin-connect library from polluting stdout and breaking MCP JSON-RPC protocol
+  private async silentCall<T>(fn: () => Promise<T>): Promise<T> {
+    const originalConsoleLog = console.log;
+    const originalConsoleWarn = console.warn;
+    const originalConsoleInfo = console.info;
+
+    try {
+      // Temporarily silence stdout/info output (keep stderr for our own logging)
+      console.log = () => {};
+      console.warn = () => {};
+      console.info = () => {};
+
+      const result = await fn();
+
+      // Restore console methods
+      console.log = originalConsoleLog;
+      console.warn = originalConsoleWarn;
+      console.info = originalConsoleInfo;
+
+      return result;
+    } catch (error) {
+      // Restore console methods in case of error
+      console.log = originalConsoleLog;
+      console.warn = originalConsoleWarn;
+      console.info = originalConsoleInfo;
+
+      throw error;
+    }
   }
 
   private async ensureAuthenticated(): Promise<void> {
     const now = Date.now();
 
-    // Re-authenticate if not authenticated or session expired
-    if (!this.isAuthenticated || now - this.lastAuthTime > this.authTimeout) {
-      try {
-        console.log("Authenticating with Garmin Connect...");
+    if (this.isAuthenticated && now - this.lastAuthTime < this.authTimeout) {
+      return;
+    }
+
+    try {
+      console.error("Authenticating with Garmin Connect...");
+      await this.silentCall(async () => {
         await this.garminConnect.login();
-        this.isAuthenticated = true;
-        this.lastAuthTime = now;
-        console.log("Successfully authenticated with Garmin Connect");
-      } catch (error) {
-        console.error("Failed to authenticate with Garmin Connect:", error);
-        throw new Error("Unable to authenticate with Garmin Connect. Please check your credentials.");
-      }
+      });
+
+      this.isAuthenticated = true;
+      this.lastAuthTime = now;
+      console.error("Successfully authenticated with Garmin Connect");
+    } catch (error) {
+      this.isAuthenticated = false;
+      console.error(`Failed to authenticate with Garmin Connect: ${error}`);
+      throw new Error(`Failed to authenticate with Garmin Connect: ${error}`);
     }
   }
 
-  async getRecentRuns(limit: number = 10): Promise<RunWorkout[]> {
+  private isRunningActivity(activity: any): boolean {
+    return RUNNING_ACTIVITY_TYPES.includes(activity.activityType?.typeKey);
+  }
+
+  async getRecentActivities(limit: number = 10): Promise<any[]> {
     await this.ensureAuthenticated();
 
     try {
-      console.log(`Fetching ${limit} recent runs from Garmin Connect...`);
-
-      // Get activities from Garmin Connect
-      const activities = await this.garminConnect.getActivities(0, limit);
-
-      // Filter for running activities and map to our format
-      const runningActivities = activities
-        .filter(
-          (activity: any) =>
-            activity.activityType?.typeKey === "running" ||
-            activity.activityType?.typeKey === "track_running" ||
-            activity.activityType?.typeKey === "treadmill_running" ||
-            activity.activityType?.typeKey === "trail_running"
-        )
-        .slice(0, limit)
-        .map((activity: any) => this.mapToRunWorkout(activity));
-
-      console.log(`Found ${runningActivities.length} running activities`);
-      return runningActivities;
+      console.error(`Fetching ${limit} recent activities from Garmin Connect...`);
+      const activities = await this.silentCall(async () => {
+        return await this.garminConnect.getActivities(0, limit);
+      });
+      console.error(`Successfully fetched ${activities.length} activities`);
+      return activities;
     } catch (error) {
-      console.error("Error fetching recent runs:", error);
-      throw new Error("Failed to fetch recent runs from Garmin Connect");
+      console.error(`Failed to fetch activities: ${error}`);
+      throw new Error(`Failed to fetch activities: ${error}`);
     }
   }
 
@@ -114,30 +161,27 @@ export class GarminService {
     await this.ensureAuthenticated();
 
     try {
-      console.log(`Fetching details for run ${runId}...`);
-
-      // Get activity details from Garmin Connect
+      console.error(`Fetching details for run ID: ${runId}`);
       const activityDetails = await this.garminConnect.getActivity({ activityId: parseInt(runId) });
 
       if (!activityDetails) {
+        console.error(`No activity found for run ID: ${runId}`);
         return null;
       }
 
-      // Map to our detailed format
       const runWorkout = this.mapToRunWorkout(activityDetails);
 
-      // Get additional details like splits if available
       const detailedRun: DetailedRunWorkout = {
         ...runWorkout,
         elevationGain: typeof activityDetails.elevationGain === "number" ? activityDetails.elevationGain : undefined,
         temperature: typeof activityDetails.maxTemperature === "number" ? activityDetails.maxTemperature : undefined,
-        weather: undefined, // Weather data not available in Garmin Connect API
         startLocation: this.formatLocation(activityDetails),
         route: !!activityDetails.hasPolyline,
         heartRateZones: this.formatHeartRateZones(activityDetails),
         splits: this.extractSplits(activityDetails),
       };
 
+      console.error(`Successfully fetched details for run on ${detailedRun.date}`);
       return detailedRun;
     } catch (error) {
       console.error(`Error fetching run details for ${runId}:`, error);
@@ -152,32 +196,23 @@ export class GarminService {
       const endDate = date ? new Date(date) : new Date();
       const startDate = this.calculatePeriodStart(period, endDate);
 
-      console.log(
-        `Fetching running stats for ${period} from ${startDate.toISOString().split("T")[0]} to ${
+      console.error(
+        `Calculating running stats for ${period} period: ${startDate.toISOString().split("T")[0]} to ${
           endDate.toISOString().split("T")[0]
-        }...`
+        }`
       );
 
-      // Get activities for the period (fetch more to ensure we get all running activities)
       const activities = await this.garminConnect.getActivities(0, 200);
 
-      // Filter for running activities within the date range
       const runningActivities = activities.filter((activity: any) => {
         const activityDate = new Date(activity.startTimeLocal);
-        return (
-          (activity.activityType?.typeKey === "running" ||
-            activity.activityType?.typeKey === "track_running" ||
-            activity.activityType?.typeKey === "treadmill_running" ||
-            activity.activityType?.typeKey === "trail_running") &&
-          activityDate >= startDate &&
-          activityDate <= endDate
-        );
+        return this.isRunningActivity(activity) && activityDate >= startDate && activityDate <= endDate;
       });
 
-      // Calculate statistics
+      console.error(`Found ${runningActivities.length} running activities in the specified period`);
+
       const stats = this.calculateRunningStats(runningActivities, startDate, endDate, period);
 
-      console.log(`Found ${runningActivities.length} running activities for statistics`);
       return stats;
     } catch (error) {
       console.error("Error fetching running stats:", error);
@@ -330,7 +365,6 @@ export class GarminService {
       maxHeartRate,
       longestRun: Math.round(longestRun * 100) / 100,
       fastestPace: bestPace,
-      comparison: `${period} data from Garmin Connect`,
     };
   }
 
@@ -343,22 +377,26 @@ export class GarminService {
 
   // Helper method to format time in seconds to HH:MM:SS or MM:SS
   private formatTime(totalSeconds: number): string {
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
+    // Ensure we have a valid number
+    const seconds = Math.round(totalSeconds);
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainingSeconds = seconds % 60;
 
     if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+      return `${hours}:${minutes.toString().padStart(2, "0")}:${remainingSeconds.toString().padStart(2, "0")}`;
     } else {
-      return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+      return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
     }
   }
 
   // Helper method to calculate pace from distance and time
   private calculatePace(distanceKm: number, timeSeconds: number): string {
-    const paceSeconds = timeSeconds / distanceKm;
+    if (distanceKm === 0 || timeSeconds === 0) return "0:00";
+
+    const paceSeconds = Math.round(timeSeconds / distanceKm);
     const minutes = Math.floor(paceSeconds / 60);
-    const seconds = Math.round(paceSeconds % 60);
+    const seconds = paceSeconds % 60;
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   }
 }
