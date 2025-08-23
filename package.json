@@ -1,0 +1,40 @@
+{
+  "name": "garmin-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Garmin running workout data integration with Claude Desktop",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "garmin-mcp-server": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch & node --watch dist/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "mcp",
+    "garmin",
+    "running",
+    "workouts",
+    "health",
+    "fitness"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "dotenv": "^17.2.1",
+    "garmin-connect": "^1.6.2",
+    "node-fetch": "^3.3.2",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  },
+  "files": [
+    "dist"
+  ]
+}
