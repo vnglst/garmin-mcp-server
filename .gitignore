@@ -32,3 +32,4 @@ coverage/
 # Temporary folders
 tmp/
 temp/
+activities.db
