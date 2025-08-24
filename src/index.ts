@@ -36,7 +36,13 @@ class GarminDataService {
   private dbPath: string;
 
   constructor(dbPath: string = "garmin-data.db") {
-    this.dbPath = path.resolve(dbPath);
+    // Resolve the database path relative to this script's directory
+    const scriptDir = path.dirname(new URL(import.meta.url).pathname);
+    this.dbPath = path.resolve(scriptDir, "..", dbPath);
+
+    if (!fs.existsSync(this.dbPath)) {
+      throw new Error(`Database file not found at ${this.dbPath}. Please run the download script first.`);
+    }
   }
 
   private async getDatabase(): Promise<sqlite3.Database> {
