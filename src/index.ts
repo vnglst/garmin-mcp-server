@@ -58,7 +58,12 @@ class ActivityDatabaseService {
     });
   }
 
-  async getActivities(startDate?: string, endDate?: string, limit: number = 50): Promise<any[]> {
+  async getActivities(
+    startDate?: string,
+    endDate?: string,
+    limit: number = 50,
+    sort: "ASC" | "DESC" = "DESC"
+  ): Promise<any[]> {
     const db = await this.getDatabase();
 
     try {
@@ -102,8 +107,8 @@ class ActivityDatabaseService {
           params.push(endDate);
         }
 
-        // Sort by date descending and limit
-        sql += ` ORDER BY start_time_local DESC LIMIT ?`;
+        // Sort by date and limit
+        sql += ` ORDER BY start_time_local ${sort === "ASC" ? "ASC" : "DESC"} LIMIT ?`;
         params.push(limit);
 
         db.all(sql, params, (err, rows) => {
@@ -239,11 +244,17 @@ async function main() {
           startDate: z.string().optional().describe("Start date in YYYY-MM-DD format"),
           endDate: z.string().optional().describe("End date in YYYY-MM-DD format"),
           limit: z.number().min(1).max(500).optional().default(50).describe("Maximum number of results"),
+          sort: z.enum(["ASC", "DESC"]).optional().default("DESC").describe("Sort order for activities"),
         },
       },
       async (args) => {
         try {
-          const activities = await dbService.getActivities(args.startDate, args.endDate, args.limit || 50);
+          const activities = await dbService.getActivities(
+            args.startDate,
+            args.endDate,
+            args.limit || 50,
+            args.sort || "DESC"
+          );
 
           if (activities.length === 0) {
             return {

@@ -210,20 +210,36 @@ async function main() {
     console.log("✅ Successfully logged in to Garmin Connect");
 
     // Download activities
-    console.log("📥 Downloading the 500 most recent activities...");
-    const activities = await gc.getActivities(0, 500); // Always get the 500 most recent
+    console.log("📥 Downloading all activities with pagination...");
 
-    if (!activities || activities.length === 0) {
-      console.log("ℹ️ No new activities found");
+    let allActivities = [];
+    let start = 0;
+    const limit = 100; // Sensible limit for each page
+    let keepGoing = true;
+
+    while (keepGoing) {
+      console.log(`📥 Fetching activities from index ${start}...`);
+      const activities = await gc.getActivities(start, limit);
+
+      if (activities && activities.length > 0) {
+        allActivities = allActivities.concat(activities);
+        start += limit;
+      } else {
+        keepGoing = false;
+      }
+    }
+
+    if (allActivities.length === 0) {
+      console.log("ℹ️ No activities found to download.");
       db.close();
       return;
     }
 
-    console.log(`📦 Downloaded ${activities.length} activities`);
+    console.log(`📦 Downloaded a total of ${allActivities.length} activities.`);
 
     // Save to database
     console.log("💾 Saving to database...");
-    await saveActivities(db, activities);
+    await saveActivities(db, allActivities);
 
     // Final count
     const finalCount = await getActivitiesCount(db);
