@@ -33,3 +33,4 @@ coverage/
 tmp/
 temp/
 activities.db
+garmin-data.db

@@ -34,7 +34,7 @@ function loadEnvFile() {
 // Database setup
 function initializeDatabase() {
   return new Promise((resolve, reject) => {
-    const db = new sqlite3.Database("activities.db", (err) => {
+    const db = new sqlite3.Database("garmin-data.db", (err) => {
       if (err) {
         console.error("Error opening database:", err);
         return reject(err);

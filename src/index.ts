@@ -6,7 +6,6 @@ import { z } from "zod";
 import sqlite3 from "sqlite3";
 import fs from "fs";
 import path from "path";
-import { spawn } from "child_process";
 
 // Manual environment file loading to avoid console output from dotenv
 function loadEnvFile() {
@@ -33,10 +32,10 @@ function loadEnvFile() {
 }
 
 // Simple database service for activities only
-class ActivityDatabaseService {
+class GarminDataService {
   private dbPath: string;
 
-  constructor(dbPath: string = "activities.db") {
+  constructor(dbPath: string = "garmin-data.db") {
     this.dbPath = path.resolve(dbPath);
   }
 
@@ -123,88 +122,51 @@ class ActivityDatabaseService {
       await this.closeDatabase(db);
     }
   }
-}
 
-// Function to check if database needs updating
-async function shouldUpdateDatabase(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const dbPath = "activities.db";
+  async getHealthStats(startDate?: string, endDate?: string, limit: number = 50): Promise<any[]> {
+    const db = await this.getDatabase();
 
-    if (!fs.existsSync(dbPath)) {
-      console.error("📁 Database not found, will create it");
-      resolve(true);
-      return;
-    }
+    try {
+      return new Promise((resolve, reject) => {
+        let sql = `
+          SELECT 
+            date,
+            vo2max,
+            weight,
+            body_fat,
+            body_water,
+            bone_mass,
+            muscle_mass
+          FROM health_stats 
+          WHERE 1=1
+        `;
 
-    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
-      if (err) {
-        console.error("⚠️ Cannot read database, will update");
-        resolve(true);
-        return;
-      }
+        const params: any[] = [];
 
-      db.get("SELECT MAX(start_time_local) as latest_date FROM activities", (err, row: any) => {
-        db.close();
-
-        if (err || !row.latest_date) {
-          console.error("📊 No activities found, will download");
-          resolve(true);
-          return;
+        if (startDate) {
+          sql += ` AND date >= ?`;
+          params.push(startDate);
+        }
+        if (endDate) {
+          sql += ` AND date <= ?`;
+          params.push(endDate);
         }
 
-        const latestDate = new Date(row.latest_date);
-        const now = new Date();
-        const hoursSinceLatest = (now.getTime() - latestDate.getTime()) / (1000 * 60 * 60);
+        sql += ` ORDER BY date DESC LIMIT ?`;
+        params.push(limit);
 
-        // Update if latest activity is more than 6 hours old
-        const needsUpdate = hoursSinceLatest > 6;
-
-        if (needsUpdate) {
-          console.error(`📅 Latest activity is ${Math.round(hoursSinceLatest)} hours old, updating database`);
-        } else {
-          console.error(
-            `✅ Database is fresh (latest activity ${Math.round(hoursSinceLatest)} hours ago), skipping update`
-          );
-        }
-
-        resolve(needsUpdate);
+        db.all(sql, params, (err, rows) => {
+          if (err) {
+            reject(new Error(`Database query error: ${err.message}`));
+            return;
+          }
+          resolve(rows || []);
+        });
       });
-    });
-  });
-}
-
-// Function to run the download script
-async function updateDatabase(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    console.error("🔄 Updating activity database...");
-
-    const downloadScript = path.resolve("download-activities.js");
-    if (!fs.existsSync(downloadScript)) {
-      console.error("⚠️ Download script not found, skipping database update");
-      resolve();
-      return;
+    } finally {
+      await this.closeDatabase(db);
     }
-
-    const child = spawn("node", [downloadScript], {
-      stdio: ["inherit", "pipe", "pipe"], // Capture stdout and stderr to prevent mixing with MCP output
-      cwd: process.cwd(),
-    });
-
-    child.on("close", (code) => {
-      if (code === 0) {
-        console.error("✅ Database update completed successfully");
-        resolve();
-      } else {
-        console.error(`⚠️ Database update failed with code ${code}, continuing with existing data`);
-        resolve(); // Don't reject - continue with existing data
-      }
-    });
-
-    child.on("error", (error) => {
-      console.error(`⚠️ Database update error: ${error.message}, continuing with existing data`);
-      resolve(); // Don't reject - continue with existing data
-    });
-  });
+  }
 }
 
 async function main() {
@@ -213,11 +175,6 @@ async function main() {
     loadEnvFile();
     console.error("Environment variables loaded");
 
-    // Check if database needs updating and update if necessary
-    if (await shouldUpdateDatabase()) {
-      await updateDatabase();
-    }
-
     // Initialize the MCP server
     const server = new McpServer({
       name: "garmin-mcp-server",
@@ -225,9 +182,9 @@ async function main() {
     });
 
     // Initialize database service
-    let dbService: ActivityDatabaseService;
+    let dbService: GarminDataService;
     try {
-      dbService = new ActivityDatabaseService();
+      dbService = new GarminDataService();
       console.error("Database service initialized successfully");
     } catch (error) {
       console.error("Failed to initialize database service:", error);
@@ -327,7 +284,67 @@ ${activitiesText}
       }
     );
 
-    console.error("Registered 1 tool: get-activities");
+    server.registerTool(
+      "get-health-stats",
+      {
+        title: "Get Health Stats",
+        description: "Retrieve health statistics with optional date filtering",
+        inputSchema: {
+          startDate: z.string().optional().describe("Start date in YYYY-MM-DD format"),
+          endDate: z.string().optional().describe("End date in YYYY-MM-DD format"),
+          limit: z.number().min(1).max(500).optional().default(50).describe("Maximum number of results"),
+        },
+      },
+      async (args) => {
+        try {
+          const stats = await dbService.getHealthStats(args.startDate, args.endDate, args.limit || 50);
+
+          if (stats.length === 0) {
+            return {
+              content: [{ type: "text", text: "No health stats found for the specified criteria." }],
+            };
+          }
+
+          const statsText = stats
+            .map((stat: any) => {
+              const parts = [
+                `**${stat.date}**`,
+                stat.vo2max ? `VO2max: ${stat.vo2max}` : null,
+                stat.weight ? `Weight: ${stat.weight}kg` : null,
+                stat.body_fat ? `Fat: ${stat.body_fat}%` : null,
+                stat.muscle_mass ? `Muscle: ${stat.muscle_mass}kg` : null,
+              ].filter(Boolean);
+              return parts.join(" | ");
+            })
+            .join("\n");
+
+          const summary = `
+🩺 **Health Stats Summary**
+📅 Date Range: ${stats[stats.length - 1].date} to ${stats[0].date}
+📊 Found: ${stats.length} entries
+
+**Health Stats:**
+${statsText}
+          `;
+
+          return {
+            content: [{ type: "text", text: summary.trim() }],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error retrieving health stats: ${error instanceof Error ? error.message : String(error)}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    console.error("Registered 2 tools: get-activities, get-health-stats");
 
     // Connect to stdio transport
     const transport = new StdioServerTransport();
