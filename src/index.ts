@@ -95,7 +95,22 @@ class GarminDataService {
             average_hr as avg_heart_rate,
             max_hr as max_heart_rate,
             location_name,
-            description
+            description,
+            vo2_max,
+            ROUND(avg_stride_length, 2) as avg_stride_length_m,
+            ROUND(max_stride_length, 2) as max_stride_length_m,
+            ROUND(training_effect, 1) as training_effect,
+            ROUND(anaerobic_training_effect, 1) as anaerobic_training_effect,
+            ROUND(aerobic_training_effect, 1) as aerobic_training_effect,
+            ROUND(avg_vertical_oscillation, 2) as avg_vertical_oscillation_cm,
+            avg_ground_contact_time,
+            ROUND(vertical_ratio, 2) as vertical_ratio_percent,
+            ROUND(avg_fractional_cadence * 2, 0) as avg_cadence_spm,
+            ROUND(max_fractional_cadence * 2, 0) as max_cadence_spm,
+            avg_power,
+            max_power,
+            ROUND(grit, 2) as grit,
+            ROUND(flow, 2) as flow
           FROM activities 
           WHERE 1=1
         `;
@@ -201,6 +216,8 @@ async function main() {
                 activity.pace_per_km && activity.distance_km > 0 ? `${activity.pace_per_km}/km` : null,
                 activity.calories ? `${activity.calories} cal` : null,
                 activity.avg_heart_rate ? `❤️ ${activity.avg_heart_rate} bpm` : null,
+                activity.vo2_max ? `VO2max: ${activity.vo2_max}` : null,
+                activity.avg_cadence_spm ? `Cadence: ${activity.avg_cadence_spm} spm` : null,
                 activity.location_name || null,
               ].filter(Boolean);
 

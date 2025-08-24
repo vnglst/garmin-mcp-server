@@ -31,6 +31,45 @@ function loadEnvFile() {
   }
 }
 
+// Define the database schema using an array for robustness and maintainability
+const activitySchema = [
+  { dbKey: "activity_id", dbType: "INTEGER PRIMARY KEY", garminKey: "activityId" },
+  { dbKey: "activity_name", dbType: "TEXT", garminKey: "activityName" },
+  { dbKey: "description", dbType: "TEXT", garminKey: "description" },
+  { dbKey: "start_time_local", dbType: "TEXT", garminKey: "startTimeLocal" },
+  { dbKey: "activity_type_key", dbType: "TEXT", garminKey: "activityType.typeKey" },
+  { dbKey: "location_name", dbType: "TEXT", garminKey: "locationName" },
+  { dbKey: "distance", dbType: "REAL", garminKey: "distance" },
+  { dbKey: "duration", dbType: "INTEGER", garminKey: "duration" },
+  { dbKey: "calories", dbType: "INTEGER", garminKey: "calories" },
+  { dbKey: "average_hr", dbType: "INTEGER", garminKey: "averageHR" },
+  { dbKey: "max_hr", dbType: "INTEGER", garminKey: "maxHR" },
+  { dbKey: "vo2_max", dbType: "REAL", garminKey: "vO2MaxValue" },
+  { dbKey: "avg_stride_length", dbType: "REAL", garminKey: "avgStrideLength" },
+  { dbKey: "max_stride_length", dbType: "REAL", garminKey: "maxStrideLength" },
+  { dbKey: "training_effect", dbType: "REAL", garminKey: "trainingEffect" },
+  { dbKey: "anaerobic_training_effect", dbType: "REAL", garminKey: "anaerobicTrainingEffect" },
+  { dbKey: "aerobic_training_effect", dbType: "REAL", garminKey: "aerobicTrainingEffect" },
+  { dbKey: "avg_vertical_oscillation", dbType: "REAL", garminKey: "avgVerticalOscillation" },
+  { dbKey: "avg_ground_contact_time", dbType: "INTEGER", garminKey: "avgGroundContactTime" },
+  { dbKey: "vertical_ratio", dbType: "REAL", garminKey: "verticalRatio" },
+  { dbKey: "avg_fractional_cadence", dbType: "REAL", garminKey: "avgFractionalCadence" },
+  { dbKey: "max_fractional_cadence", dbType: "REAL", garminKey: "maxFractionalCadence" },
+  { dbKey: "avg_power", dbType: "INTEGER", garminKey: "avgPower" },
+  { dbKey: "max_power", dbType: "INTEGER", garminKey: "maxPower" },
+  { dbKey: "grit", dbType: "REAL", garminKey: "grit" },
+  { dbKey: "flow", dbType: "REAL", garminKey: "flow" },
+  { dbKey: "avg_running_cadence_spm", dbType: "INTEGER", garminKey: "averageRunningCadenceInStepsPerMinute" },
+  { dbKey: "max_running_cadence_spm", dbType: "INTEGER", garminKey: "maxRunningCadenceInStepsPerMinute" },
+];
+
+// Helper to get a nested property from an object
+const getNested = (obj, path) => {
+  if (!path) return obj;
+  const keys = path.split(".");
+  return keys.reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), obj);
+};
+
 // Database setup
 function initializeDatabase() {
   return new Promise((resolve, reject) => {
@@ -42,33 +81,23 @@ function initializeDatabase() {
     });
 
     db.serialize(() => {
-      // Create activities table
-      db.run(
-        `
+      // Dynamically create the table from the schema
+      const columns = activitySchema.map((col) => `${col.dbKey} ${col.dbType}`).join(",\n          ");
+      const createTableSql = `
         CREATE TABLE IF NOT EXISTS activities (
-          activity_id INTEGER PRIMARY KEY,
-          activity_name TEXT,
-          description TEXT,
-          start_time_local TEXT,
-          activity_type_key TEXT,
-          distance REAL,
-          duration INTEGER,
-          average_hr INTEGER,
-          max_hr INTEGER,
-          calories INTEGER,
-          location_name TEXT
+          ${columns}
         )
-      `,
-        (err) => {
-          if (err) {
-            console.error("Error creating activities table:", err);
-            reject(err);
-          } else {
-            console.log("✅ Activities table ready");
-            resolve(db);
-          }
+      `;
+
+      db.run(createTableSql, (err) => {
+        if (err) {
+          console.error("Error creating activities table:", err);
+          reject(err);
+        } else {
+          console.log("✅ Activities table ready");
+          resolve(db);
         }
-      );
+      });
     });
   });
 }
@@ -108,40 +137,27 @@ function saveActivities(db, activities) {
           return reject(new Error("Failed to begin transaction", { cause: err }));
         }
 
-        const stmt = db.prepare(`
-          INSERT OR REPLACE INTO activities (
-            activity_id, activity_name, description, start_time_local,
-            activity_type_key, distance, duration, average_hr, max_hr, calories, location_name
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
+        // Dynamically create the INSERT statement
+        const dbKeys = activitySchema.map((col) => col.dbKey).join(", ");
+        const placeholders = activitySchema.map(() => "?").join(", ");
+        const insertSql = `INSERT OR REPLACE INTO activities (${dbKeys}) VALUES (${placeholders})`;
+        const stmt = db.prepare(insertSql);
 
         let saved = 0;
         let errors = 0;
 
         activities.forEach((activity) => {
-          stmt.run(
-            [
-              activity.activityId,
-              activity.activityName,
-              activity.description,
-              activity.startTimeLocal,
-              activity.activityType?.typeKey,
-              activity.distance,
-              activity.duration,
-              activity.averageHR,
-              activity.maxHR,
-              activity.calories,
-              activity.locationName,
-            ],
-            (err) => {
-              if (err) {
-                errors++;
-                console.error(`Error saving activity ${activity.activityId}:`, err.message);
-              } else {
-                saved++;
-              }
+          // Dynamically map Garmin data to the statement parameters
+          const params = activitySchema.map((col) => getNested(activity, col.garminKey));
+
+          stmt.run(params, (err) => {
+            if (err) {
+              errors++;
+              console.error(`Error saving activity ${activity.activityId}:`, err.message);
+            } else {
+              saved++;
             }
-          );
+          });
         });
 
         stmt.finalize((err) => {
