@@ -206,7 +206,7 @@ async function main() {
         inputSchema: {
           startDate: z.string().optional().describe("Start date in YYYY-MM-DD format"),
           endDate: z.string().optional().describe("End date in YYYY-MM-DD format"),
-          limit: z.number().min(1).max(500).optional().default(50).describe("Maximum number of results"),
+          limit: z.number().min(1).max(100).optional().default(25).describe("Maximum number of results"),
           sort: z.enum(["ASC", "DESC"]).optional().default("DESC").describe("Sort order for activities"),
         },
       },
@@ -215,7 +215,7 @@ async function main() {
           const activities = await dbService.getActivities(
             args.startDate,
             args.endDate,
-            args.limit || 50,
+            args.limit || 25,
             args.sort || "DESC"
           );
 
@@ -298,12 +298,12 @@ ${activitiesText}
         inputSchema: {
           startDate: z.string().optional().describe("Start date in YYYY-MM-DD format"),
           endDate: z.string().optional().describe("End date in YYYY-MM-DD format"),
-          limit: z.number().min(1).max(500).optional().default(50).describe("Maximum number of results"),
+          limit: z.number().min(1).max(100).optional().default(25).describe("Maximum number of results"),
         },
       },
       async (args) => {
         try {
-          const stats = await dbService.getHealthStats(args.startDate, args.endDate, args.limit || 50);
+          const stats = await dbService.getHealthStats(args.startDate, args.endDate, args.limit || 25);
 
           if (stats.length === 0) {
             return {
