@@ -128,51 +128,6 @@ class GarminDataService {
       await this.closeDatabase(db);
     }
   }
-
-  async getHealthStats(startDate?: string, endDate?: string, limit: number = 50): Promise<any[]> {
-    const db = await this.getDatabase();
-
-    try {
-      return new Promise((resolve, reject) => {
-        let sql = `
-          SELECT 
-            date,
-            vo2max,
-            weight,
-            body_fat,
-            body_water,
-            bone_mass,
-            muscle_mass
-          FROM health_stats 
-          WHERE 1=1
-        `;
-
-        const params: any[] = [];
-
-        if (startDate) {
-          sql += ` AND date >= ?`;
-          params.push(startDate);
-        }
-        if (endDate) {
-          sql += ` AND date <= ?`;
-          params.push(endDate);
-        }
-
-        sql += ` ORDER BY date DESC LIMIT ?`;
-        params.push(limit);
-
-        db.all(sql, params, (err, rows) => {
-          if (err) {
-            reject(new Error(`Database query error: ${err.message}`));
-            return;
-          }
-          resolve(rows || []);
-        });
-      });
-    } finally {
-      await this.closeDatabase(db);
-    }
-  }
 }
 
 async function main() {
@@ -289,68 +244,6 @@ ${activitiesText}
         }
       }
     );
-
-    server.registerTool(
-      "get-health-stats",
-      {
-        title: "Get Health Stats",
-        description: "Retrieve health statistics with optional date filtering",
-        inputSchema: {
-          startDate: z.string().optional().describe("Start date in YYYY-MM-DD format"),
-          endDate: z.string().optional().describe("End date in YYYY-MM-DD format"),
-          limit: z.number().min(1).max(100).optional().default(25).describe("Maximum number of results"),
-        },
-      },
-      async (args) => {
-        try {
-          const stats = await dbService.getHealthStats(args.startDate, args.endDate, args.limit || 25);
-
-          if (stats.length === 0) {
-            return {
-              content: [{ type: "text", text: "No health stats found for the specified criteria." }],
-            };
-          }
-
-          const statsText = stats
-            .map((stat: any) => {
-              const parts = [
-                `**${stat.date}**`,
-                stat.vo2max ? `VO2max: ${stat.vo2max}` : null,
-                stat.weight ? `Weight: ${stat.weight}kg` : null,
-                stat.body_fat ? `Fat: ${stat.body_fat}%` : null,
-                stat.muscle_mass ? `Muscle: ${stat.muscle_mass}kg` : null,
-              ].filter(Boolean);
-              return parts.join(" | ");
-            })
-            .join("\n");
-
-          const summary = `
-🩺 **Health Stats Summary**
-📅 Date Range: ${stats[stats.length - 1].date} to ${stats[0].date}
-📊 Found: ${stats.length} entries
-
-**Health Stats:**
-${statsText}
-          `;
-
-          return {
-            content: [{ type: "text", text: summary.trim() }],
-          };
-        } catch (error) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Error retrieving health stats: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      }
-    );
-
-    console.error("Registered 2 tools: get-activities, get-health-stats");
 
     // Connect to stdio transport
     const transport = new StdioServerTransport();

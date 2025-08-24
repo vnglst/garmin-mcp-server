@@ -62,33 +62,11 @@ function initializeDatabase() {
         (err) => {
           if (err) {
             console.error("Error creating activities table:", err);
-            return reject(err);
+            reject(err);
+          } else {
+            console.log("✅ Activities table ready");
+            resolve(db);
           }
-          console.log("✅ Activities table ready");
-
-          // Create health_stats table
-          db.run(
-            `
-            CREATE TABLE IF NOT EXISTS health_stats (
-              date TEXT PRIMARY KEY,
-              vo2max REAL,
-              weight REAL,
-              body_fat REAL,
-              body_water REAL,
-              bone_mass REAL,
-              muscle_mass REAL
-            )
-          `,
-            (err) => {
-              if (err) {
-                console.error("Error creating health_stats table:", err);
-                reject(err);
-              } else {
-                console.log("✅ Health stats table ready");
-                resolve(db);
-              }
-            }
-          );
         }
       );
     });
@@ -194,95 +172,6 @@ function saveActivities(db, activities) {
   });
 }
 
-// Save health stats to database
-function saveHealthStats(db, stats) {
-  return new Promise((resolve, reject) => {
-    db.serialize(() => {
-      db.run("BEGIN TRANSACTION", (err) => {
-        if (err) {
-          return reject(new Error("Failed to begin transaction", { cause: err }));
-        }
-
-        const stmt = db.prepare(`
-          INSERT OR REPLACE INTO health_stats (
-            date, vo2max, weight, body_fat, body_water, bone_mass, muscle_mass
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        let saved = 0;
-        let errors = 0;
-
-        const combinedStats = {};
-
-        if (stats.vo2max) {
-          stats.vo2max.forEach((item) => {
-            const date = item.date.split("T")[0];
-            if (!combinedStats[date]) combinedStats[date] = { date };
-            combinedStats[date].vo2max = item.value;
-          });
-        }
-
-        if (stats.weight) {
-          stats.weight.forEach((item) => {
-            const date = new Date(item.date).toISOString().split("T")[0];
-            if (!combinedStats[date]) combinedStats[date] = { date };
-            combinedStats[date].weight = item.weight / 1000; // convert to kg
-          });
-        }
-
-        if (stats.bodyComposition) {
-          stats.bodyComposition.forEach((item) => {
-            const date = new Date(item.date).toISOString().split("T")[0];
-            if (!combinedStats[date]) combinedStats[date] = { date };
-            combinedStats[date].body_fat = item.bodyFat;
-            combinedStats[date].body_water = item.bodyWater;
-            combinedStats[date].bone_mass = item.boneMass;
-            combinedStats[date].muscle_mass = item.muscleMass;
-          });
-        }
-
-        Object.values(combinedStats).forEach((stat) => {
-          stmt.run(
-            [stat.date, stat.vo2max, stat.weight, stat.body_fat, stat.body_water, stat.bone_mass, stat.muscle_mass],
-            (err) => {
-              if (err) {
-                errors++;
-                console.error(`Error saving health stat for ${stat.date}:`, err.message);
-              } else {
-                saved++;
-              }
-            }
-          );
-        });
-
-        stmt.finalize((err) => {
-          if (err) {
-            return db.run("ROLLBACK", () => {
-              reject(new Error("Failed to finalize statement", { cause: err }));
-            });
-          }
-
-          if (errors > 0) {
-            return db.run("ROLLBACK", () => {
-              reject(new Error(`${errors} health stats failed to save.`));
-            });
-          }
-
-          db.run("COMMIT", (commitErr) => {
-            if (commitErr) {
-              return db.run("ROLLBACK", () => {
-                reject(new Error("Failed to commit transaction", { cause: commitErr }));
-              });
-            }
-            console.log(`💾 Saved ${saved} health stats, ${errors} errors`);
-            resolve(saved);
-          });
-        });
-      });
-    });
-  });
-}
-
 async function main() {
   try {
     console.log("🏃‍♂️ Garmin Activities Download - Simplified Version");
@@ -360,22 +249,6 @@ async function main() {
     } else {
       console.log("✅ Activities are already up to date.");
     }
-
-    // Download health stats
-    console.log("📥 Downloading health stats...");
-    const today = new Date();
-    const startDate = new Date("2010-01-01"); // A reasonable start date for historical data
-
-    const fitnessAge = await gc.getFitnessAgeData(today);
-    const vo2max = fitnessAge.vo2MaxData;
-    const weight = await gc.getDailyWeighIns(startDate, today);
-    const bodyComposition = await gc.getBodyComposition(startDate, today);
-
-    console.log(
-      `📦 Downloaded health stats: ${vo2max.length} VO2max, ${weight.length} weight, ${bodyComposition.length} body composition entries`
-    );
-
-    await saveHealthStats(db, { vo2max, weight, bodyComposition });
 
     // Final count
     const finalCount = await getActivitiesCount(db);
