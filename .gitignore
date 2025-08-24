@@ -32,5 +32,5 @@ coverage/
 # Temporary folders
 tmp/
 temp/
-activities.db
-garmin-data.db
+*.db
+*.mov
