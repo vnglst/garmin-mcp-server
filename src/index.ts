@@ -3,15 +3,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import {
-  GarminService,
-  RunWorkout,
-  DetailedRunWorkout,
-  RunningStats,
-  FitnessMetrics,
-  HistoricRunsQuery,
-} from "./garmin-service.js";
+import sqlite3 from "sqlite3";
 import fs from "fs";
+import path from "path";
+import { spawn } from "child_process";
 
 // Manual environment file loading to avoid console output from dotenv
 function loadEnvFile() {
@@ -37,11 +32,186 @@ function loadEnvFile() {
   }
 }
 
+// Simple database service for activities only
+class ActivityDatabaseService {
+  private dbPath: string;
+
+  constructor(dbPath: string = "activities.db") {
+    this.dbPath = path.resolve(dbPath);
+  }
+
+  private async getDatabase(): Promise<sqlite3.Database> {
+    return new Promise((resolve, reject) => {
+      const db = new sqlite3.Database(this.dbPath, sqlite3.OPEN_READONLY, (err) => {
+        if (err) {
+          reject(new Error(`Failed to open database: ${err.message}`));
+          return;
+        }
+        resolve(db);
+      });
+    });
+  }
+
+  private async closeDatabase(db: sqlite3.Database): Promise<void> {
+    return new Promise((resolve) => {
+      db.close(() => resolve());
+    });
+  }
+
+  async getActivities(startDate?: string, endDate?: string, limit: number = 50): Promise<any[]> {
+    const db = await this.getDatabase();
+
+    try {
+      return new Promise((resolve, reject) => {
+        let sql = `
+          SELECT 
+            activity_id as id,
+            activity_name as name,
+            date(start_time_local) as date,
+            activity_type_key as type,
+            ROUND(distance / 1000.0, 2) as distance_km,
+            CASE 
+              WHEN duration >= 3600 THEN 
+                printf('%d:%02d:%02d', duration / 3600, (duration % 3600) / 60, duration % 60)
+              ELSE 
+                printf('%d:%02d', duration / 60, duration % 60)
+            END as duration,
+            CASE 
+              WHEN distance > 0 THEN 
+                printf('%d:%02d', (duration * 1000 / distance) / 60, (duration * 1000 / distance) % 60)
+              ELSE '0:00'
+            END as pace_per_km,
+            calories,
+            average_hr as avg_heart_rate,
+            max_hr as max_heart_rate,
+            location_name,
+            description
+          FROM activities 
+          WHERE 1=1
+        `;
+
+        const params: any[] = [];
+
+        // Date filters
+        if (startDate) {
+          sql += ` AND date(start_time_local) >= ?`;
+          params.push(startDate);
+        }
+        if (endDate) {
+          sql += ` AND date(start_time_local) <= ?`;
+          params.push(endDate);
+        }
+
+        // Sort by date descending and limit
+        sql += ` ORDER BY start_time_local DESC LIMIT ?`;
+        params.push(limit);
+
+        db.all(sql, params, (err, rows) => {
+          if (err) {
+            reject(new Error(`Database query error: ${err.message}`));
+            return;
+          }
+          resolve(rows || []);
+        });
+      });
+    } finally {
+      await this.closeDatabase(db);
+    }
+  }
+}
+
+// Function to check if database needs updating
+async function shouldUpdateDatabase(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const dbPath = "activities.db";
+
+    if (!fs.existsSync(dbPath)) {
+      console.error("📁 Database not found, will create it");
+      resolve(true);
+      return;
+    }
+
+    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+      if (err) {
+        console.error("⚠️ Cannot read database, will update");
+        resolve(true);
+        return;
+      }
+
+      db.get("SELECT MAX(start_time_local) as latest_date FROM activities", (err, row: any) => {
+        db.close();
+
+        if (err || !row.latest_date) {
+          console.error("📊 No activities found, will download");
+          resolve(true);
+          return;
+        }
+
+        const latestDate = new Date(row.latest_date);
+        const now = new Date();
+        const hoursSinceLatest = (now.getTime() - latestDate.getTime()) / (1000 * 60 * 60);
+
+        // Update if latest activity is more than 6 hours old
+        const needsUpdate = hoursSinceLatest > 6;
+
+        if (needsUpdate) {
+          console.error(`📅 Latest activity is ${Math.round(hoursSinceLatest)} hours old, updating database`);
+        } else {
+          console.error(
+            `✅ Database is fresh (latest activity ${Math.round(hoursSinceLatest)} hours ago), skipping update`
+          );
+        }
+
+        resolve(needsUpdate);
+      });
+    });
+  });
+}
+
+// Function to run the download script
+async function updateDatabase(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    console.error("🔄 Updating activity database...");
+
+    const downloadScript = path.resolve("download-activities.js");
+    if (!fs.existsSync(downloadScript)) {
+      console.error("⚠️ Download script not found, skipping database update");
+      resolve();
+      return;
+    }
+
+    const child = spawn("node", [downloadScript], {
+      stdio: ["inherit", "pipe", "pipe"], // Capture stdout and stderr to prevent mixing with MCP output
+      cwd: process.cwd(),
+    });
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        console.error("✅ Database update completed successfully");
+        resolve();
+      } else {
+        console.error(`⚠️ Database update failed with code ${code}, continuing with existing data`);
+        resolve(); // Don't reject - continue with existing data
+      }
+    });
+
+    child.on("error", (error) => {
+      console.error(`⚠️ Database update error: ${error.message}, continuing with existing data`);
+      resolve(); // Don't reject - continue with existing data
+    });
+  });
+}
+
 async function main() {
   try {
-    // Load environment variables manually (avoid dotenv console output)
+    // Load environment variables manually
     loadEnvFile();
     console.error("Environment variables loaded");
+
+    // Check if database needs updating and update if necessary
+    if (await shouldUpdateDatabase()) {
+      await updateDatabase();
+    }
 
     // Initialize the MCP server
     const server = new McpServer({
@@ -49,562 +219,95 @@ async function main() {
       version: "1.0.0",
     });
 
-    // Initialize Garmin service with error handling
-    let garminService: GarminService;
+    // Initialize database service
+    let dbService: ActivityDatabaseService;
     try {
-      garminService = new GarminService();
-      console.error("Garmin service initialized successfully");
+      dbService = new ActivityDatabaseService();
+      console.error("Database service initialized successfully");
     } catch (error) {
-      console.error("Failed to initialize Garmin service:", error);
+      console.error("Failed to initialize database service:", error);
       process.exit(1);
     }
 
-    // Register tools for Garmin workout data
+    // Single tool: Get activities with date filtering
     server.registerTool(
-      "get-recent-runs",
+      "get-activities",
       {
-        title: "Get Recent Running Workouts",
-        description: "Retrieve your recent running workouts from Garmin",
+        title: "Get Activities",
+        description: "Retrieve activities with optional date filtering",
         inputSchema: {
-          limit: z
-            .number()
-            .min(1)
-            .max(50)
-            .default(10)
-            .optional()
-            .describe("Number of recent runs to retrieve (1-50, default: 10)"),
+          startDate: z.string().optional().describe("Start date in YYYY-MM-DD format"),
+          endDate: z.string().optional().describe("End date in YYYY-MM-DD format"),
+          limit: z.number().min(1).max(500).optional().default(50).describe("Maximum number of results"),
         },
       },
-      async ({ limit = 10 }) => {
+      async (args) => {
         try {
-          const runs = await garminService.getRecentActivities(limit);
+          const activities = await dbService.getActivities(args.startDate, args.endDate, args.limit || 50);
 
-          if (runs.length === 0) {
+          if (activities.length === 0) {
             return {
-              content: [
-                {
-                  type: "text",
-                  text: "No recent running workouts found. Make sure your Garmin device is synced and you have completed some runs.",
-                },
-              ],
+              content: [{ type: "text", text: "No activities found for the specified criteria." }],
             };
           }
 
-          const runsText = runs
-            .map(
-              (run: RunWorkout) => `
-**Run on ${run.date}**
-- Distance: ${run.distance} km
-- Duration: ${run.duration}
-- Pace: ${run.pace}/km
-- Calories: ${run.calories}
-- Avg HR: ${run.avgHeartRate ? run.avgHeartRate + " bpm" : "N/A"}
-- Max HR: ${run.maxHeartRate ? run.maxHeartRate + " bpm" : "N/A"}
-${run.notes ? "- Notes: " + run.notes : ""}
-        `
-            )
-            .join("\n---\n");
+          const totalDistance = activities.reduce((sum: number, activity: any) => sum + (activity.distance_km || 0), 0);
+          const totalCalories = activities.reduce((sum: number, activity: any) => sum + (activity.calories || 0), 0);
 
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Found ${runs.length} recent running workout${runs.length > 1 ? "s" : ""}:\n\n${runsText}`,
-              },
-            ],
-          };
-        } catch (error) {
-          console.error("Error in get-recent-runs tool:", error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Error retrieving runs: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      }
-    );
-
-    server.registerTool(
-      "get-run-details",
-      {
-        title: "Get Detailed Run Information",
-        description: "Get detailed information about a specific running workout",
-        inputSchema: {
-          runId: z.string().describe("The ID of the specific run to retrieve details for"),
-        },
-      },
-      async ({ runId }: { runId: string }) => {
-        try {
-          const runDetails = await garminService.getRunDetails(runId);
-
-          if (!runDetails) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Run with ID "${runId}" not found.`,
-                },
-              ],
-              isError: true,
-            };
-          }
-
-          const detailsText = `
-**Detailed Run Information**
-
-**Basic Stats:**
-- Date: ${runDetails.date}
-- Distance: ${runDetails.distance} km
-- Duration: ${runDetails.duration}
-- Average Pace: ${runDetails.pace}/km
-- Calories Burned: ${runDetails.calories}
-
-**Heart Rate:**
-- Average: ${runDetails.avgHeartRate ? runDetails.avgHeartRate + " bpm" : "N/A"}
-- Maximum: ${runDetails.maxHeartRate ? runDetails.maxHeartRate + " bpm" : "N/A"}
-- Zones: ${runDetails.heartRateZones ? runDetails.heartRateZones : "N/A"}
-
-**Performance:**
-- Elevation Gain: ${runDetails.elevationGain ? runDetails.elevationGain + " m" : "N/A"}
-- Temperature: ${runDetails.temperature ? runDetails.temperature + "°C" : "N/A"}
-
-**GPS Data:**
-- Start Location: ${runDetails.startLocation || "N/A"}
-- Route: ${runDetails.route ? "Available" : "N/A"}
-
-${runDetails.notes ? "**Notes:** " + runDetails.notes : ""}
-${runDetails.splits ? "**Splits:** Available (" + runDetails.splits.length + " splits)" : ""}
-        `;
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: detailsText.trim(),
-              },
-            ],
-          };
-        } catch (error) {
-          console.error("Error in get-run-details tool:", error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Error retrieving run details: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      }
-    );
-
-    server.registerTool(
-      "get-running-stats",
-      {
-        title: "Get Running Statistics",
-        description: "Get aggregated running statistics for a specified time period",
-        inputSchema: {
-          period: z
-            .enum(["week", "month", "quarter", "year"])
-            .default("month")
-            .describe("Time period for statistics (week, month, quarter, year)"),
-          date: z
-            .string()
-            .optional()
-            .describe("Specific date to start the period from (YYYY-MM-DD format, defaults to current date)"),
-        },
-      },
-      async ({ period = "month", date }: { period?: "week" | "month" | "quarter" | "year"; date?: string }) => {
-        try {
-          const stats = await garminService.getRunningStats(period, date);
-
-          const statsText = `
-**Running Statistics (${period})**
-${date ? `Period: ${stats.periodStart} to ${stats.periodEnd}` : `Current ${period}`}
-
-**Volume:**
-- Total Runs: ${stats.totalRuns}
-- Total Distance: ${stats.totalDistance} km
-- Total Time: ${stats.totalTime}
-- Average Distance per Run: ${stats.avgDistance} km
-
-**Performance:**
-- Average Pace: ${stats.avgPace}/km
-- Best Pace: ${stats.bestPace}/km
-- Total Calories: ${stats.totalCalories}
-
-**Heart Rate:**
-- Average HR: ${stats.avgHeartRate ? stats.avgHeartRate + " bpm" : "N/A"}
-- Max HR: ${stats.maxHeartRate ? stats.maxHeartRate + " bpm" : "N/A"}
-
-**Progress:**
-- Longest run: ${stats.longestRun} km
-- Fastest run: ${stats.fastestPace}/km
-        `;
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: statsText.trim(),
-              },
-            ],
-          };
-        } catch (error) {
-          console.error("Error in get-running-stats tool:", error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Error retrieving running statistics: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      }
-    );
-
-    server.registerTool(
-      "get-fitness-metrics",
-      {
-        title: "Get Fitness Metrics",
-        description:
-          "Retrieve fitness metrics including VO2 Max, fitness age, lactate threshold, and other performance indicators",
-        inputSchema: {},
-      },
-      async () => {
-        try {
-          const metrics = await garminService.getFitnessMetrics();
-
-          const metricsText = `
-**Fitness Metrics**
-
-**Aerobic Fitness:**
-- VO2 Max: ${metrics.vo2Max ? metrics.vo2Max + " ml/kg/min" : "N/A"}
-- Fitness Age: ${metrics.fitnessAge ? metrics.fitnessAge + " years" : "N/A"}
-
-**Heart Rate:**
-- Resting HR: ${metrics.restingHeartRate ? metrics.restingHeartRate + " bpm" : "N/A"}
-- Max HR: ${metrics.maxHeartRate ? metrics.maxHeartRate + " bpm" : "N/A"}
-
-**Performance Thresholds:**
-- Lactate Threshold HR: ${metrics.lactateThreshold?.heartRate ? metrics.lactateThreshold.heartRate + " bpm" : "N/A"}
-- Lactate Threshold Pace: ${metrics.lactateThreshold?.pace ? metrics.lactateThreshold.pace + "/km" : "N/A"}
-- Functional Threshold Power: ${metrics.functionalThresholdPower ? metrics.functionalThresholdPower + " watts" : "N/A"}
-
-**Last Updated:** ${metrics.lastMeasuredDate || "N/A"}
-        `;
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: metricsText.trim(),
-              },
-            ],
-          };
-        } catch (error) {
-          console.error("Error in get-fitness-metrics tool:", error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Error retrieving fitness metrics: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      }
-    );
-
-    server.registerTool(
-      "get-historic-runs",
-      {
-        title: "Get Historic Running Data",
-        description: "Retrieve running activities from a specific date range with optional filters",
-        inputSchema: {
-          startDate: z.string().describe("Start date in YYYY-MM-DD format"),
-          endDate: z.string().describe("End date in YYYY-MM-DD format"),
-          activityType: z
-            .enum(["all", "running", "trail_running", "treadmill_running", "track_running"])
-            .optional()
-            .default("running")
-            .describe("Type of running activity to filter"),
-          minDistance: z.number().optional().describe("Minimum distance in kilometers"),
-          maxDistance: z.number().optional().describe("Maximum distance in kilometers"),
-          minDuration: z.number().optional().describe("Minimum duration in seconds"),
-          maxDuration: z.number().optional().describe("Maximum duration in seconds"),
-          limit: z.number().min(1).max(200).optional().default(50).describe("Maximum number of results to return"),
-        },
-      },
-      async ({
-        startDate,
-        endDate,
-        activityType = "running",
-        minDistance,
-        maxDistance,
-        minDuration,
-        maxDuration,
-        limit = 50,
-      }) => {
-        try {
-          const query: HistoricRunsQuery = {
-            startDate,
-            endDate,
-            activityType,
-            minDistance,
-            maxDistance,
-            minDuration,
-            maxDuration,
-            limit,
-          };
-
-          const runs = await garminService.getHistoricRuns(query);
-
-          if (runs.length === 0) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No running activities found between ${startDate} and ${endDate} matching your criteria.`,
-                },
-              ],
-            };
-          }
-
-          const runsText = runs
-            .map(
-              (run: RunWorkout) => `
-**${run.date}** | ${run.distance}km | ${run.duration} | ${run.pace}/km | ${run.calories} cal
-${run.avgHeartRate ? `❤️ ${run.avgHeartRate} bpm` : ""} ${run.notes ? `📝 ${run.notes}` : ""}
-            `
-            )
-            .join("\n");
-
-          const summary = `
-**Historic Runs Summary**
-📅 Period: ${startDate} to ${endDate}
-🏃 Found: ${runs.length} runs
-📏 Total Distance: ${runs.reduce((sum: number, run: RunWorkout) => sum + run.distance, 0).toFixed(2)} km
-🔥 Total Calories: ${runs.reduce((sum: number, run: RunWorkout) => sum + run.calories, 0)}
-${activityType !== "all" ? `🎯 Activity Type: ${activityType}` : ""}
-${minDistance ? `📊 Min Distance: ${minDistance}km` : ""}
-${maxDistance ? `📊 Max Distance: ${maxDistance}km` : ""}
-
-**Activities:**
-${runsText}
-          `;
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: summary.trim(),
-              },
-            ],
-          };
-        } catch (error) {
-          console.error("Error in get-historic-runs tool:", error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Error retrieving historic runs: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      }
-    );
-
-    server.registerTool(
-      "get-runs-by-date-range",
-      {
-        title: "Get Runs by Date Range",
-        description: "Simple date range query for running activities (convenience method)",
-        inputSchema: {
-          startDate: z.string().describe("Start date in YYYY-MM-DD format"),
-          endDate: z.string().describe("End date in YYYY-MM-DD format"),
-          limit: z.number().min(1).max(100).optional().default(50).describe("Maximum number of results"),
-        },
-      },
-      async ({ startDate, endDate, limit = 50 }) => {
-        try {
-          const runs = await garminService.getRunsByDateRange(startDate, endDate, limit);
-
-          if (runs.length === 0) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No runs found between ${startDate} and ${endDate}.`,
-                },
-              ],
-            };
-          }
-
-          const totalDistance = runs.reduce((sum: number, run: RunWorkout) => sum + run.distance, 0);
-          const totalCalories = runs.reduce((sum: number, run: RunWorkout) => sum + run.calories, 0);
-
-          const runsText = runs
-            .map(
-              (run: RunWorkout) => `
-**${run.date}**
-- Distance: ${run.distance} km
-- Duration: ${run.duration}
-- Pace: ${run.pace}/km
-- Calories: ${run.calories}
-${run.avgHeartRate ? `- Avg HR: ${run.avgHeartRate} bpm` : ""}
-${run.notes ? `- Notes: ${run.notes}` : ""}
-            `
-            )
-            .join("\n---\n");
-
-          const summary = `
-**Runs from ${startDate} to ${endDate}**
-
-📊 **Summary:**
-- Total Runs: ${runs.length}
-- Total Distance: ${totalDistance.toFixed(2)} km
-- Total Calories: ${totalCalories}
-- Average Distance: ${(totalDistance / runs.length).toFixed(2)} km
-
-${runsText}
-          `;
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: summary.trim(),
-              },
-            ],
-          };
-        } catch (error) {
-          console.error("Error in get-runs-by-date-range tool:", error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Error retrieving runs by date range: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      }
-    );
-
-    server.registerTool(
-      "get-all-historical-runs",
-      {
-        title: "Get All Historical Running Data",
-        description:
-          "Retrieve ALL running activities going back to a specific year (for users with extensive historical data)",
-        inputSchema: {
-          startYear: z
-            .number()
-            .min(2010)
-            .max(2030)
-            .optional()
-            .default(2020)
-            .describe("Starting year to fetch data from (default: 2020)"),
-          limit: z
-            .number()
-            .min(50)
-            .max(2000)
-            .optional()
-            .default(500)
-            .describe("Maximum number of runs to return (default: 500)"),
-        },
-      },
-      async ({ startYear = 2020, limit = 500 }) => {
-        try {
-          console.error(`Fetching all historical runs from ${startYear}, this may take a while...`);
-
-          const runs = await garminService.getAllHistoricalRuns(startYear, limit);
-
-          if (runs.length === 0) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No runs found from ${startYear} onwards. This could mean:\n- No data available from that period\n- API limitations\n- Authentication issues\n\nTry a more recent start year or check your Garmin Connect data.`,
-                },
-              ],
-            };
-          }
-
-          const totalDistance = runs.reduce((sum: number, run: RunWorkout) => sum + run.distance, 0);
-          const totalCalories = runs.reduce((sum: number, run: RunWorkout) => sum + run.calories, 0);
-
-          // Group runs by year for summary
-          const runsByYear = runs.reduce((acc: any, run: RunWorkout) => {
-            const year = run.date.split("-")[0];
-            if (!acc[year]) acc[year] = [];
-            acc[year].push(run);
-            return acc;
+          // Group activities by type for summary
+          const typeGroups = activities.reduce((groups: any, activity: any) => {
+            const type = activity.type || "unknown";
+            if (!groups[type]) groups[type] = [];
+            groups[type].push(activity);
+            return groups;
           }, {});
 
-          const yearSummaries = Object.keys(runsByYear)
-            .sort((a, b) => parseInt(b) - parseInt(a))
-            .map((year) => {
-              const yearRuns = runsByYear[year];
-              const yearDistance = yearRuns.reduce((sum: number, run: RunWorkout) => sum + run.distance, 0);
-              return `**${year}:** ${yearRuns.length} runs, ${yearDistance.toFixed(1)} km`;
+          const activitiesText = activities
+            .map((activity: any) => {
+              const parts = [
+                `**${activity.date}**`,
+                activity.name || activity.type,
+                activity.distance_km ? `${activity.distance_km}km` : null,
+                activity.duration || null,
+                activity.pace_per_km && activity.distance_km > 0 ? `${activity.pace_per_km}/km` : null,
+                activity.calories ? `${activity.calories} cal` : null,
+                activity.avg_heart_rate ? `❤️ ${activity.avg_heart_rate} bpm` : null,
+                activity.location_name || null,
+              ].filter(Boolean);
+
+              return parts.join(" | ");
             })
             .join("\n");
 
-          // Show recent runs for quick reference
-          const recentRuns = runs
-            .slice(0, 10)
-            .map((run: RunWorkout) => `${run.date} | ${run.distance}km | ${run.pace}/km`)
-            .join("\n");
+          const typesSummary = Object.entries(typeGroups)
+            .map(([type, activities]: [string, any]) => `${type}: ${activities.length}`)
+            .join(", ");
+
+          const dateRange =
+            activities.length > 0 ? `${activities[activities.length - 1].date} to ${activities[0].date}` : "N/A";
 
           const summary = `
-🏃‍♂️ **Complete Historical Running Data (${startYear} onwards)**
+🏃‍♂️ **Activities Summary**
+📅 Date Range: ${dateRange}
+📊 Found: ${activities.length} activities
+📏 Total Distance: ${totalDistance.toFixed(2)} km
+🔥 Total Calories: ${totalCalories}
+📈 Average Distance: ${activities.length > 0 ? (totalDistance / activities.length).toFixed(2) : 0} km
+🏃 Activity Types: ${typesSummary}
 
-📊 **Overall Summary:**
-- Total Runs Found: ${runs.length}
-- Total Distance: ${totalDistance.toFixed(2)} km
-- Total Calories: ${totalCalories.toLocaleString()}
-- Date Range: ${runs[runs.length - 1]?.date} to ${runs[0]?.date}
-- Average Distance: ${(totalDistance / runs.length).toFixed(2)} km/run
-
-📅 **Runs by Year:**
-${yearSummaries}
-
-🏃 **Most Recent 10 Runs:**
-${recentRuns}
-
-💡 **Note:** This data includes ALL your running activities from ${startYear}. Use other tools for specific date ranges or filtering.
+**Activities:**
+${activitiesText}
           `;
 
           return {
-            content: [
-              {
-                type: "text",
-                text: summary.trim(),
-              },
-            ],
+            content: [{ type: "text", text: summary.trim() }],
           };
         } catch (error) {
-          console.error("Error in get-all-historical-runs tool:", error);
           return {
             content: [
               {
                 type: "text",
-                text: `Error retrieving all historical runs: ${
-                  error instanceof Error ? error.message : String(error)
-                }\n\nThis could be due to:\n- Large dataset requiring more time\n- API rate limits\n- Network issues\n\nTry with a more recent start year or smaller limit.`,
+                text: `Error retrieving activities: ${error instanceof Error ? error.message : String(error)}`,
               },
             ],
             isError: true,
@@ -613,94 +316,7 @@ ${recentRuns}
       }
     );
 
-    // Register resources for workout data
-    server.registerResource(
-      "recent-runs",
-      "garmin://runs/recent",
-      {
-        title: "Recent Running Workouts",
-        description: "JSON data of recent running workouts from Garmin",
-        mimeType: "application/json",
-      },
-      async () => {
-        try {
-          console.error("Fetching recent runs resource...");
-          const runs = await garminService.getRecentActivities(20);
-          return {
-            contents: [
-              {
-                uri: "garmin://runs/recent",
-                mimeType: "application/json",
-                text: JSON.stringify(runs, null, 2),
-              },
-            ],
-          };
-        } catch (error) {
-          console.error("Error in recent-runs resource:", error);
-          return {
-            contents: [
-              {
-                uri: "garmin://runs/recent",
-                mimeType: "text/plain",
-                text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-          };
-        }
-      }
-    );
-
-    // Add a prompt for analyzing running performance
-    server.registerPrompt(
-      "analyze-running-performance",
-      {
-        title: "Analyze Running Performance",
-        description: "Analyze running performance and provide insights and recommendations",
-        argsSchema: {
-          timeframe: z
-            .enum(["week", "month", "quarter", "year"])
-            .optional()
-            .describe("Time period to analyze (week, month, quarter, year)"),
-        },
-      },
-      async ({ timeframe = "month" }: { timeframe?: "week" | "month" | "quarter" | "year" }) => {
-        try {
-          console.error(`Generating performance analysis for ${timeframe} period...`);
-          const stats = await garminService.getRunningStats(timeframe as "week" | "month" | "quarter" | "year");
-          const recentRuns = await garminService.getRecentActivities(5);
-
-          return {
-            messages: [
-              {
-                role: "user",
-                content: {
-                  type: "text",
-                  text: `Please analyze my running performance for the past ${timeframe}. Here are my statistics:
-
-${JSON.stringify(stats, null, 2)}
-
-Recent runs data:
-${JSON.stringify(recentRuns, null, 2)}
-
-Please provide:
-1. Performance analysis and trends
-2. Areas for improvement
-3. Training recommendations
-4. Goal suggestions based on current performance
-
-Format the response in a clear, encouraging way with actionable insights.`,
-                },
-              },
-            ],
-          };
-        } catch (error) {
-          console.error("Error in analyze-running-performance prompt:", error);
-          throw error;
-        }
-      }
-    );
-
-    console.error("Registered 7 tools, 1 resource, and 1 prompt");
+    console.error("Registered 1 tool: get-activities");
 
     // Connect to stdio transport
     const transport = new StdioServerTransport();
@@ -714,7 +330,7 @@ Format the response in a clear, encouraging way with actionable insights.`,
   }
 }
 
-// Handle cleanup and errors using MCP best practices
+// Handle cleanup and errors
 process.on("SIGINT", async () => {
   console.error("Received SIGINT, shutting down gracefully...");
   process.exit(0);
@@ -725,10 +341,8 @@ process.on("SIGTERM", async () => {
   process.exit(0);
 });
 
-// Handle EPIPE errors (broken pipe) gracefully - common with MCP stdio transport
 process.on("uncaughtException", (error) => {
   if ((error as any).code === "EPIPE") {
-    // Client disconnected, exit gracefully without logging (expected behavior)
     process.exit(0);
   } else {
     console.error("Uncaught exception:", error);
