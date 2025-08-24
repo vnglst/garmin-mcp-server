@@ -63,75 +63,33 @@ class GarminDataService {
     });
   }
 
-  async getActivities(
-    startDate?: string,
-    endDate?: string,
-    limit: number = 50,
-    sort: "ASC" | "DESC" = "DESC"
-  ): Promise<any[]> {
+  async getSchema(): Promise<any[]> {
     const db = await this.getDatabase();
-
     try {
       return new Promise((resolve, reject) => {
-        let sql = `
-          SELECT 
-            activity_id as id,
-            activity_name as name,
-            date(start_time_local) as date,
-            activity_type_key as type,
-            ROUND(distance / 1000.0, 2) as distance_km,
-            CASE 
-              WHEN duration >= 3600 THEN 
-                printf('%d:%02d:%02d', duration / 3600, (duration % 3600) / 60, duration % 60)
-              ELSE 
-                printf('%d:%02d', duration / 60, duration % 60)
-            END as duration,
-            CASE 
-              WHEN distance > 0 THEN 
-                printf('%d:%02d', (duration * 1000 / distance) / 60, (duration * 1000 / distance) % 60)
-              ELSE '0:00'
-            END as pace_per_km,
-            calories,
-            average_hr as avg_heart_rate,
-            max_hr as max_heart_rate,
-            location_name,
-            description,
-            vo2_max,
-            ROUND(avg_stride_length, 2) as avg_stride_length_m,
-            ROUND(max_stride_length, 2) as max_stride_length_m,
-            ROUND(training_effect, 1) as training_effect,
-            ROUND(anaerobic_training_effect, 1) as anaerobic_training_effect,
-            ROUND(aerobic_training_effect, 1) as aerobic_training_effect,
-            ROUND(avg_vertical_oscillation, 2) as avg_vertical_oscillation_cm,
-            avg_ground_contact_time,
-            ROUND(vertical_ratio, 2) as vertical_ratio_percent,
-            ROUND(avg_fractional_cadence * 2, 0) as avg_cadence_spm,
-            ROUND(max_fractional_cadence * 2, 0) as max_cadence_spm,
-            avg_power,
-            max_power,
-            ROUND(grit, 2) as grit,
-            ROUND(flow, 2) as flow
-          FROM activities 
-          WHERE 1=1
-        `;
+        const sql = `SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';`;
+        db.all(sql, [], (err, rows) => {
+          if (err) {
+            reject(new Error(`Database query error: ${err.message}`));
+            return;
+          }
+          resolve(rows || []);
+        });
+      });
+    } finally {
+      await this.closeDatabase(db);
+    }
+  }
 
-        const params: any[] = [];
+  async runQuery(query: string): Promise<any[]> {
+    if (!query.trim().toLowerCase().startsWith("select")) {
+      throw new Error("Only SELECT queries are allowed.");
+    }
 
-        // Date filters
-        if (startDate) {
-          sql += ` AND date(start_time_local) >= ?`;
-          params.push(startDate);
-        }
-        if (endDate) {
-          sql += ` AND date(start_time_local) <= ?`;
-          params.push(endDate);
-        }
-
-        // Sort by date and limit
-        sql += ` ORDER BY start_time_local ${sort === "ASC" ? "ASC" : "DESC"} LIMIT ?`;
-        params.push(limit);
-
-        db.all(sql, params, (err, rows) => {
+    const db = await this.getDatabase();
+    try {
+      return new Promise((resolve, reject) => {
+        db.all(query, [], (err, rows) => {
           if (err) {
             reject(new Error(`Database query error: ${err.message}`));
             return;
@@ -167,93 +125,71 @@ async function main() {
       process.exit(1);
     }
 
-    // Single tool: Get activities with date filtering
+    // Tool 1: Get database schema
     server.registerTool(
-      "get-activities",
+      "get-schema",
       {
-        title: "Get Activities",
-        description: "Retrieve activities with optional date filtering",
-        inputSchema: {
-          startDate: z.string().optional().describe("Start date in YYYY-MM-DD format"),
-          endDate: z.string().optional().describe("End date in YYYY-MM-DD format"),
-          limit: z.number().min(1).max(100).optional().default(25).describe("Maximum number of results"),
-          sort: z.enum(["ASC", "DESC"]).optional().default("DESC").describe("Sort order for activities"),
-        },
+        title: "Get Database Schema",
+        description: "Fetches the schema of the available tables in the database.",
+        inputSchema: {},
       },
-      async (args) => {
+      async () => {
         try {
-          const activities = await dbService.getActivities(
-            args.startDate,
-            args.endDate,
-            args.limit || 25,
-            args.sort || "DESC"
-          );
-
-          if (activities.length === 0) {
-            return {
-              content: [{ type: "text", text: "No activities found for the specified criteria." }],
-            };
-          }
-
-          const totalDistance = activities.reduce((sum: number, activity: any) => sum + (activity.distance_km || 0), 0);
-          const totalCalories = activities.reduce((sum: number, activity: any) => sum + (activity.calories || 0), 0);
-
-          // Group activities by type for summary
-          const typeGroups = activities.reduce((groups: any, activity: any) => {
-            const type = activity.type || "unknown";
-            if (!groups[type]) groups[type] = [];
-            groups[type].push(activity);
-            return groups;
-          }, {});
-
-          const activitiesText = activities
-            .map((activity: any) => {
-              const parts = [
-                `**${activity.date}**`,
-                activity.name || activity.type,
-                activity.distance_km ? `${activity.distance_km}km` : null,
-                activity.duration || null,
-                activity.pace_per_km && activity.distance_km > 0 ? `${activity.pace_per_km}/km` : null,
-                activity.calories ? `${activity.calories} cal` : null,
-                activity.avg_heart_rate ? `❤️ ${activity.avg_heart_rate} bpm` : null,
-                activity.vo2_max ? `VO2max: ${activity.vo2_max}` : null,
-                activity.avg_cadence_spm ? `Cadence: ${activity.avg_cadence_spm} spm` : null,
-                activity.location_name || null,
-              ].filter(Boolean);
-
-              return parts.join(" | ");
-            })
-            .join("\n");
-
-          const typesSummary = Object.entries(typeGroups)
-            .map(([type, activities]: [string, any]) => `${type}: ${activities.length}`)
-            .join(", ");
-
-          const dateRange =
-            activities.length > 0 ? `${activities[activities.length - 1].date} to ${activities[0].date}` : "N/A";
-
-          const summary = `
-🏃‍♂️ **Activities Summary**
-📅 Date Range: ${dateRange}
-📊 Found: ${activities.length} activities
-📏 Total Distance: ${totalDistance.toFixed(2)} km
-🔥 Total Calories: ${totalCalories}
-📈 Average Distance: ${activities.length > 0 ? (totalDistance / activities.length).toFixed(2) : 0} km
-🏃 Activity Types: ${typesSummary}
-
-**Activities:**
-${activitiesText}
-          `;
-
+          const schema = await dbService.getSchema();
+          const schemaText = schema
+            .map((table: any) => `**Table: ${table.name}**\n\`\`\`sql\n${table.sql}\n\`\`\``)
+            .join("\n\n");
           return {
-            content: [{ type: "text", text: summary.trim() }],
+            content: [{ type: "text", text: schemaText }],
           };
         } catch (error) {
           return {
             content: [
               {
                 type: "text",
-                text: `Error retrieving activities: ${error instanceof Error ? error.message : String(error)}`,
+                text: `Error fetching schema: ${error instanceof Error ? error.message : String(error)}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // Tool 2: Run a SELECT query
+    server.registerTool(
+      "run-query",
+      {
+        title: "Run SELECT Query",
+        description: "Runs a SELECT query against the database.",
+        inputSchema: {
+          query: z.string().describe("The SELECT query to execute."),
+        },
+      },
+      async (args) => {
+        try {
+          const results = await dbService.runQuery(args.query);
+          if (results.length === 0) {
+            return {
+              content: [{ type: "text", text: "Query returned no results." }],
+            };
+          }
+          // A simple way to format as a markdown table
+          const headers = Object.keys(results[0]);
+          const headerLine = `| ${headers.join(" | ")} |`;
+          const separatorLine = `| ${headers.map(() => "---").join(" | ")} |`;
+          const bodyLines = results.map((row) => `| ${headers.map((h) => row[h]).join(" | ")} |`);
+          const table = [headerLine, separatorLine, ...bodyLines].join("\n");
+
+          return {
+            content: [{ type: "text", text: table }],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error running query: ${error instanceof Error ? error.message : String(error)}`,
               },
             ],
             isError: true,
