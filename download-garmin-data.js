@@ -321,9 +321,9 @@ async function main() {
     console.log("✅ Successfully logged in to Garmin Connect");
 
     // Download activities
-    console.log("📥 Downloading all activities with pagination...");
+    console.log("📥 Downloading new activities with pagination...");
 
-    let allActivities = [];
+    let newActivities = [];
     let start = 0;
     const limit = 100; // Sensible limit for each page
     let keepGoing = true;
@@ -333,31 +333,41 @@ async function main() {
       const activities = await gc.getActivities(start, limit);
 
       if (activities && activities.length > 0) {
-        allActivities = allActivities.concat(activities);
-        start += limit;
+        const latestActivityDate = await getLatestActivityDate(db);
+        let stopNextTime = false;
+
+        for (const activity of activities) {
+          if (latestActivityDate && new Date(activity.startTimeLocal) <= latestActivityDate) {
+            stopNextTime = true;
+            break; // Stop processing this page
+          }
+          newActivities.push(activity);
+        }
+
+        if (stopNextTime) {
+          keepGoing = false;
+        } else {
+          start += limit;
+        }
       } else {
         keepGoing = false;
       }
     }
 
-    if (allActivities.length === 0) {
-      console.log("ℹ️ No activities found to download.");
-      db.close();
-      return;
+    if (newActivities.length > 0) {
+      console.log(`📦 Downloaded ${newActivities.length} new activities.`);
+      await saveActivities(db, newActivities);
+    } else {
+      console.log("✅ Activities are already up to date.");
     }
-
-    console.log(`📦 Downloaded a total of ${allActivities.length} activities.`);
-
-    // Save to database
-    console.log("💾 Saving to database...");
-    await saveActivities(db, allActivities);
 
     // Download health stats
     console.log("📥 Downloading health stats...");
     const today = new Date();
     const startDate = new Date("2010-01-01"); // A reasonable start date for historical data
 
-    const vo2max = await gc.getVo2Max(startDate, today);
+    const fitnessAge = await gc.getFitnessAgeData(today);
+    const vo2max = fitnessAge.vo2MaxData;
     const weight = await gc.getDailyWeighIns(startDate, today);
     const bodyComposition = await gc.getBodyComposition(startDate, today);
 
