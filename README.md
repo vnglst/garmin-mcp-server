@@ -5,6 +5,7 @@ A Model Context Protocol (MCP) server that connects Claude Desktop to your **rea
 ## Quick Start
 
 ### 1. Prerequisites
+
 - Node.js 18+
 - Active Garmin Connect account with running data
 - Claude Desktop
@@ -14,7 +15,7 @@ A Model Context Protocol (MCP) server that connects Claude Desktop to your **rea
 ```bash
 # Clone and install
 git clone <your-repo-url>
-cd ai-run-coach
+cd garmin-mcp-server
 npm install
 
 # Configure your Garmin credentials
@@ -30,6 +31,7 @@ npm run download
 ```
 
 This will:
+
 - Connect to Garmin Connect using your credentials
 - Download all your activities to a local SQLite database (`data/garmin-data.db`)
 - Store detailed metrics including pace, heart rate, cadence, power, and more
@@ -37,25 +39,23 @@ This will:
 ### 4. Add to Claude Desktop
 
 #### macOS
+
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
-    "ai-run-coach": {
+    "garmin-mcp-server": {
       "command": "npx",
-      "args": [
-        "-y",
-        "tsx",
-        "/absolute/path/to/ai-run-coach/src/index.ts"
-      ],
-      "cwd": "/absolute/path/to/ai-run-coach"
+      "args": ["-y", "tsx", "/absolute/path/to/garmin-mcp-server/src/index.ts"],
+      "cwd": "/absolute/path/to/garmin-mcp-server"
     }
   }
 }
 ```
 
 #### Windows
+
 Edit `%APPDATA%\Claude\claude_desktop_config.json` with the same configuration (adjust paths for Windows).
 
 **Note:** Your Garmin credentials must be in the `.env` file in the project directory. The server will load them automatically.
@@ -63,6 +63,7 @@ Edit `%APPDATA%\Claude\claude_desktop_config.json` with the same configuration (
 ### 5. Start Using with Claude!
 
 Restart Claude Desktop, then ask questions like:
+
 - "Sync my latest Garmin activities"
 - "Show me my 5 most recent runs"
 - "What's my average pace this month?"
@@ -83,16 +84,20 @@ Restart Claude Desktop, then ask questions like:
 The server exposes three tools that Claude can use:
 
 ### 1. `get-schema`
+
 Get the database schema to understand available data fields.
 
 **Example usage in Claude:**
+
 - "What data fields are available in my running database?"
 - "Show me the database schema"
 
 ### 2. `run-query`
+
 Execute SELECT queries against your activities database.
 
 **Example usage in Claude:**
+
 - "Show me my 10 most recent runs"
 - "What's my average heart rate this month?"
 - "Find all runs longer than 10km"
@@ -101,14 +106,17 @@ Execute SELECT queries against your activities database.
 **Security:** Only SELECT queries are allowed - no data modification.
 
 ### 3. `sync-activities`
+
 Download and sync new activities from Garmin Connect to the local database.
 
 **Example usage in Claude:**
+
 - "Sync my latest Garmin activities"
 - "Update my running data"
 - "Check for new workouts"
 
 Returns a summary showing:
+
 - Number of new activities downloaded
 - Total activities in the database
 - Date of your latest activity
@@ -118,16 +126,19 @@ Returns a summary showing:
 The server includes 8 pre-configured prompts to help you analyze your running data. In Claude Desktop, you can use these prompts to quickly get insights:
 
 ### Training Analysis
+
 - **Analyze Recent Training Load** - Review last 7 days of training, load distribution, and recovery status
 - **Track Pace Improvements** - Analyze pace progression over 3 months
 - **Training Effect Analysis** - Balance between aerobic and anaerobic training
 
 ### Performance Insights
+
 - **Personal Records** - Find your fastest times and best performances
 - **Heart Rate Zone Distribution** - Analyze time in each HR zone and training intensity
 - **Elevation & Hill Running Analysis** - Performance on hilly terrain and climbing efficiency
 
 ### Regular Summaries
+
 - **Weekly Running Summary** - Complete overview of the current week's activities
 - **Running Form Analysis** - Cadence, stride length, ground contact time, and form metrics
 
@@ -138,22 +149,26 @@ Simply select a prompt in Claude Desktop to automatically generate a comprehensi
 All data from your Garmin device stored in a SQLite database (58+ fields):
 
 **Basic Metrics:**
+
 - Activity ID, name, description, timestamps (local & GMT)
 - Activity type, location name
 - Distance, duration, elapsed duration, moving duration
 - Calories, steps, lap count
 
 **Heart Rate Data:**
+
 - Average/max heart rate
 - Lactate threshold BPM
 - Time in each HR zone (1-5)
 - VO2 Max value
 
 **Speed & Pace:**
+
 - Average/max speed
 - Fastest splits (1K, 5K, 10K, mile)
 
 **Running Dynamics:**
+
 - Average/max stride length
 - Average/max cadence (including double cadence)
 - Average vertical oscillation
@@ -161,15 +176,18 @@ All data from your Garmin device stored in a SQLite database (58+ fields):
 - Vertical ratio, vertical speed
 
 **Training Load & Intensity:**
+
 - Activity training load
 - Training effect (aerobic/anaerobic)
 - Vigorous/moderate intensity minutes
 
 **Elevation:**
+
 - Elevation gain/loss
 - Min/max elevation
 
 **Power Metrics:**
+
 - Average/max power
 - Grit and Flow scores
 
@@ -201,23 +219,27 @@ npm start
 ## Troubleshooting
 
 ### Authentication Issues
+
 - Verify credentials in `.env` file (GARMIN_USERNAME and GARMIN_PASSWORD)
 - Ensure you can log into connect.garmin.com manually
 - Try logging in via web browser first
 - Check that your password doesn't contain special characters that need escaping
 
 ### Database Not Found
+
 - Run `npm run download` first to create the database
 - Check that `data/garmin-data.db` exists in your project directory
 - Verify the database file isn't corrupted (try deleting and re-downloading)
 
 ### Sync Not Working in Claude
+
 - Restart Claude Desktop after configuration changes
 - Check Claude Desktop logs for error messages
 - Verify the paths in `claude_desktop_config.json` are absolute, not relative
 - Ensure `.env` file exists in the project root directory
 
 ### Query Errors
+
 - Only SELECT queries are allowed (INSERT, UPDATE, DELETE are blocked)
 - Use the `get-schema` tool to see available table columns
 - Check SQL syntax is correct
@@ -225,6 +247,7 @@ npm start
 ## Security & Privacy
 
 **Your data stays completely private:**
+
 - Credentials stored locally in `.env` file only
 - Direct connection to Garmin Connect (no intermediary servers)
 - All data stored in local SQLite database on your machine
@@ -235,6 +258,7 @@ npm start
 ## Technical Details
 
 **Architecture:**
+
 - TypeScript-based MCP server
 - SQLite database for local storage
 - Direct integration with Garmin Connect API (via `garmin-connect` library)
@@ -242,6 +266,7 @@ npm start
 - MCP SDK for Claude Desktop integration
 
 **Database:**
+
 - Location: `data/garmin-data.db`
 - Format: SQLite 3
 - Updates: Incremental (only new activities downloaded)
@@ -258,6 +283,7 @@ npm start
 ## Contributing
 
 Feel free to open issues or submit pull requests for:
+
 - Bug fixes
 - New data fields to track
 - Additional MCP tools
