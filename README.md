@@ -1,6 +1,6 @@
 # Garmin MCP Server
 
-🏃‍♂️ A Model Context Protocol (MCP) server that connects Claude Desktop to your **real Garmin Connect running data** stored in a local SQLite database.
+A Model Context Protocol (MCP) server that connects Claude Desktop to your **real Garmin Connect running data** stored in a local SQLite database.
 
 ## Quick Start
 
@@ -71,12 +71,12 @@ Restart Claude Desktop, then ask questions like:
 
 ## Features
 
-✅ **Local SQLite Database** - Your data stored locally for fast access
-✅ **Auto-Sync** - Update your data from Garmin Connect directly through Claude
-✅ **SQL Queries** - Run custom queries to analyze your training data
-✅ **Comprehensive Metrics** - Heart rate, pace, cadence, power, VO2 max, and more
-✅ **AI Analysis** - Let Claude analyze your running trends and performance
-✅ **Privacy-First** - All data stays on your machine
+- **Local SQLite Database** - Your data stored locally for fast access
+- **Auto-Sync** - Update your data from Garmin Connect directly through Claude
+- **SQL Queries** - Run custom queries to analyze your training data
+- **Comprehensive Metrics** - Heart rate, pace, cadence, power, VO2 max, and more
+- **AI Analysis** - Let Claude analyze your running trends and performance
+- **Privacy-First** - All data stays on your machine
 
 ## Available MCP Tools
 
@@ -117,17 +117,17 @@ Returns a summary showing:
 
 The server includes 8 pre-configured prompts to help you analyze your running data. In Claude Desktop, you can use these prompts to quickly get insights:
 
-### 🏃 Training Analysis
+### Training Analysis
 - **Analyze Recent Training Load** - Review last 7 days of training, load distribution, and recovery status
 - **Track Pace Improvements** - Analyze pace progression over 3 months
 - **Training Effect Analysis** - Balance between aerobic and anaerobic training
 
-### 📊 Performance Insights
+### Performance Insights
 - **Personal Records** - Find your fastest times and best performances
 - **Heart Rate Zone Distribution** - Analyze time in each HR zone and training intensity
 - **Elevation & Hill Running Analysis** - Performance on hilly terrain and climbing efficiency
 
-### 📈 Regular Summaries
+### Regular Summaries
 - **Weekly Running Summary** - Complete overview of the current week's activities
 - **Running Form Analysis** - Cadence, stride length, ground contact time, and form metrics
 
@@ -201,36 +201,36 @@ npm start
 ## Troubleshooting
 
 ### Authentication Issues
-- ✅ Verify credentials in `.env` file (GARMIN_USERNAME and GARMIN_PASSWORD)
-- ✅ Ensure you can log into connect.garmin.com manually
-- ✅ Try logging in via web browser first
-- ✅ Check that your password doesn't contain special characters that need escaping
+- Verify credentials in `.env` file (GARMIN_USERNAME and GARMIN_PASSWORD)
+- Ensure you can log into connect.garmin.com manually
+- Try logging in via web browser first
+- Check that your password doesn't contain special characters that need escaping
 
 ### Database Not Found
-- ✅ Run `npm run download` first to create the database
-- ✅ Check that `data/garmin-data.db` exists in your project directory
-- ✅ Verify the database file isn't corrupted (try deleting and re-downloading)
+- Run `npm run download` first to create the database
+- Check that `data/garmin-data.db` exists in your project directory
+- Verify the database file isn't corrupted (try deleting and re-downloading)
 
 ### Sync Not Working in Claude
-- ✅ Restart Claude Desktop after configuration changes
-- ✅ Check Claude Desktop logs for error messages
-- ✅ Verify the paths in `claude_desktop_config.json` are absolute, not relative
-- ✅ Ensure `.env` file exists in the project root directory
+- Restart Claude Desktop after configuration changes
+- Check Claude Desktop logs for error messages
+- Verify the paths in `claude_desktop_config.json` are absolute, not relative
+- Ensure `.env` file exists in the project root directory
 
 ### Query Errors
-- ✅ Only SELECT queries are allowed (INSERT, UPDATE, DELETE are blocked)
-- ✅ Use the `get-schema` tool to see available table columns
-- ✅ Check SQL syntax is correct
+- Only SELECT queries are allowed (INSERT, UPDATE, DELETE are blocked)
+- Use the `get-schema` tool to see available table columns
+- Check SQL syntax is correct
 
 ## Security & Privacy
 
-🔒 **Your data stays completely private:**
-- ✅ Credentials stored locally in `.env` file only
-- ✅ Direct connection to Garmin Connect (no intermediary servers)
-- ✅ All data stored in local SQLite database on your machine
-- ✅ No third-party data sharing or cloud uploads
-- ✅ Database queries run locally
-- ✅ Only SELECT queries allowed (read-only access for Claude)
+**Your data stays completely private:**
+- Credentials stored locally in `.env` file only
+- Direct connection to Garmin Connect (no intermediary servers)
+- All data stored in local SQLite database on your machine
+- No third-party data sharing or cloud uploads
+- Database queries run locally
+- Only SELECT queries allowed (read-only access for Claude)
 
 ## Technical Details
 
