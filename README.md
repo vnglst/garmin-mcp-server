@@ -2,43 +2,46 @@
 
 A Model Context Protocol (MCP) server that connects Claude Desktop to your **real Garmin Connect running data** stored in a local SQLite database.
 
-## Quick Start
+## Setup for Claude Desktop
 
-### 1. Prerequisites
-
-- Node.js 18+
-- Active Garmin Connect account with running data
-- Claude Desktop
-
-### 2. Setup
+### 1. Install Dependencies
 
 ```bash
-# Clone and install
-git clone <your-repo-url>
-cd garmin-mcp-server
 npm install
+```
 
-# Configure your Garmin credentials
+### 2. Configure Garmin Credentials
+
+Create a `.env` file in the project root:
+
+```bash
 cp .env.example .env
-# Edit .env and add your Garmin Connect email and password
+```
+
+Edit `.env` and add your Garmin Connect credentials:
+
+```
+GARMIN_USERNAME=your-email@example.com
+GARMIN_PASSWORD=your-password
 ```
 
 ### 3. Download Your Garmin Data
 
 ```bash
-# Initial data sync - downloads all your activities
 npm run download
 ```
 
-This will:
+This downloads all your activities from Garmin Connect to a local SQLite database at `data/garmin-data.db`.
 
-- Connect to Garmin Connect using your credentials
-- Download all your activities to a local SQLite database (`data/garmin-data.db`)
-- Store detailed metrics including pace, heart rate, cadence, power, and more
+### 4. Configure Claude Desktop
 
-### 4. Add to Claude Desktop
+First, get the absolute path to this project:
 
-#### macOS
+```bash
+pwd
+```
+
+This will output something like `/Users/yourusername/Code/ai-run-coach`.
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -47,22 +50,20 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "garmin-mcp-server": {
       "command": "npx",
-      "args": ["-y", "tsx", "/absolute/path/to/garmin-mcp-server/src/index.ts"],
-      "cwd": "/absolute/path/to/garmin-mcp-server"
+      "args": ["-y", "tsx", "/Users/yourusername/Code/ai-run-coach/src/index.ts"],
+      "cwd": "/Users/yourusername/Code/ai-run-coach"
     }
   }
 }
 ```
 
-#### Windows
+Replace `/Users/yourusername/Code/ai-run-coach` with the path from the `pwd` command.
 
-Edit `%APPDATA%\Claude\claude_desktop_config.json` with the same configuration (adjust paths for Windows).
+For Windows, run `cd` to get the path, then edit `%APPDATA%\Claude\claude_desktop_config.json` instead.
 
-**Note:** Your Garmin credentials must be in the `.env` file in the project directory. The server will load them automatically.
+### 5. Restart Claude Desktop
 
-### 5. Start Using with Claude!
-
-Restart Claude Desktop, then ask questions like:
+After restarting, you can ask Claude:
 
 - "Sync my latest Garmin activities"
 - "Show me my 5 most recent runs"

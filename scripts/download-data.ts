@@ -31,7 +31,9 @@ async function main() {
 
     console.log(`📊 Database now contains ${result.totalActivities} total activities`);
     if (result.latestActivityDate) {
-      const daysSinceLatest = Math.round((new Date().getTime() - result.latestActivityDate.getTime()) / (1000 * 60 * 60 * 24));
+      const daysSinceLatest = Math.round(
+        (new Date().getTime() - result.latestActivityDate.getTime()) / (1000 * 60 * 60 * 24)
+      );
       console.log(`📅 Latest activity: ${result.latestActivityDate.toDateString()} (${daysSinceLatest} days ago)`);
     }
 
