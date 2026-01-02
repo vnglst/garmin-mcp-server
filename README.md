@@ -113,34 +113,64 @@ Returns a summary showing:
 - Total activities in the database
 - Date of your latest activity
 
+## Built-in Analysis Prompts
+
+The server includes 8 pre-configured prompts to help you analyze your running data. In Claude Desktop, you can use these prompts to quickly get insights:
+
+### 🏃 Training Analysis
+- **Analyze Recent Training Load** - Review last 7 days of training, load distribution, and recovery status
+- **Track Pace Improvements** - Analyze pace progression over 3 months
+- **Training Effect Analysis** - Balance between aerobic and anaerobic training
+
+### 📊 Performance Insights
+- **Personal Records** - Find your fastest times and best performances
+- **Heart Rate Zone Distribution** - Analyze time in each HR zone and training intensity
+- **Elevation & Hill Running Analysis** - Performance on hilly terrain and climbing efficiency
+
+### 📈 Regular Summaries
+- **Weekly Running Summary** - Complete overview of the current week's activities
+- **Running Form Analysis** - Cadence, stride length, ground contact time, and form metrics
+
+Simply select a prompt in Claude Desktop to automatically generate a comprehensive analysis using your Garmin data!
+
 ## What Data You Get
 
-All data from your Garmin device stored in a SQLite database:
+All data from your Garmin device stored in a SQLite database (58+ fields):
 
 **Basic Metrics:**
-- Activity ID, name, description, date/time
+- Activity ID, name, description, timestamps (local & GMT)
 - Activity type, location name
-- Distance, duration, calories
+- Distance, duration, elapsed duration, moving duration
+- Calories, steps, lap count
 
 **Heart Rate Data:**
-- Average heart rate, max heart rate
+- Average/max heart rate
+- Lactate threshold BPM
+- Time in each HR zone (1-5)
 - VO2 Max value
+
+**Speed & Pace:**
+- Average/max speed
+- Fastest splits (1K, 5K, 10K, mile)
 
 **Running Dynamics:**
 - Average/max stride length
+- Average/max cadence (including double cadence)
 - Average vertical oscillation
 - Average ground contact time
-- Vertical ratio
-- Average/max fractional cadence
-- Average/max running cadence (steps per minute)
+- Vertical ratio, vertical speed
 
-**Training Load:**
-- Training effect
-- Anaerobic training effect
-- Aerobic training effect
+**Training Load & Intensity:**
+- Activity training load
+- Training effect (aerobic/anaerobic)
+- Vigorous/moderate intensity minutes
+
+**Elevation:**
+- Elevation gain/loss
+- Min/max elevation
 
 **Power Metrics:**
-- Average power, max power
+- Average/max power
 - Grit and Flow scores
 
 ## How It Works
