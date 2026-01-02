@@ -1,6 +1,29 @@
-# Instructions for Working with this Codebase
+# Instructions
 
-## Project Overview
+- Don't add comments in code.
+- Document code only sparingly and only in the README.md
+- Don't create any additional documentation files.
+
+## Testing
+
+- Use `npm run test:mcp` to run the comprehensive test suite
+- This script tests all MCP server capabilities including database queries and MCP protocol features
+- Run `npm run build` before testing to ensure latest changes are compiled
+
+## MCP Usage
+
+- Use command line tools instead of the MCP inspector for testing MCP functionality
+- The MCP inspector may not work reliably in this environment
+- Use e.g. `echo '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get-schema", "arguments": {}}}' | node dist/index.js`
+
+## Docs
+
+- We're using: https://github.com/Pythe1337N/garmin-connect
+- Especially this page is relevant: https://github.com/Pythe1337N/garmin-connect/blob/master/src/garmin/types/weight.ts
+
+---
+
+# Project Overview
 
 This is a Garmin MCP (Model Context Protocol) server that provides Claude Desktop with access to running workout data from Garmin Connect. The server exposes tools to query a SQLite database containing Garmin activities data.
 
@@ -70,38 +93,7 @@ Executes SELECT queries on the database.
 
 **Security**: Only SELECT queries are allowed (enforced in code).
 
-## Development Guidelines
-
-### Code Style
-- Don't add comments in code
-- Document code only sparingly in README.md
-- Don't create additional documentation files
-- Keep functions focused and small
-
-### Testing
-
-**Build first**:
-```bash
-npm run build
-```
-
-**Test MCP tools**:
-```bash
-npm run test:mcp
-```
-
-This runs [scripts/test-mcp.sh](scripts/test-mcp.sh) which tests:
-- `get-schema` tool
-- `run-query` tool with a COUNT query
-
-**Manual testing** (command line):
-```bash
-echo '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get-schema", "arguments": {}}}' | node dist/index.js
-```
-
-**Note**: The MCP inspector may not work reliably in this environment. Use command line tools instead.
-
-### Data Management
+## Data Management
 
 **Download new activities**:
 ```bash
