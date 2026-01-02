@@ -11,7 +11,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc --watch & node --watch dist/index.js",
-    "download": "node download-garmin-data.js",
+    "download": "tsx scripts/download-data.ts",
+    "test:mcp": "scripts/test-mcp.sh",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
@@ -33,6 +34,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.3.3"
   },
   "files": [

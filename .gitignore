@@ -32,5 +32,10 @@ coverage/
 # Temporary folders
 tmp/
 temp/
+
+# Data files
+data/
 *.db
-*.mov
+
+# Demo videos
+assets/demos/*.mov

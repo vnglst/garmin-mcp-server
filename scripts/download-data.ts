@@ -1,38 +1,19 @@
 #!/usr/bin/env node
 
-import pkg from "garmin-connect";
-const { GarminConnect } = pkg;
+import { GarminConnect } from "garmin-connect";
 import sqlite3Pkg from "sqlite3";
 const sqlite3 = sqlite3Pkg.verbose();
 import fs from "fs";
 import path from "path";
+import { loadEnvFile } from "../src/utils/env-loader.js";
 
-// Load environment variables manually
-function loadEnvFile() {
-  try {
-    const envPath = ".env";
-    if (fs.existsSync(envPath)) {
-      const envFile = fs.readFileSync(envPath, "utf8");
-      const lines = envFile.split("\n");
-
-      for (const line of lines) {
-        const trimmedLine = line.trim();
-        if (trimmedLine && !trimmedLine.startsWith("#")) {
-          const [key, ...valueParts] = trimmedLine.split("=");
-          if (key && valueParts.length > 0) {
-            const value = valueParts.join("=").replace(/^["']|["']$/g, "");
-            process.env[key.trim()] = value;
-          }
-        }
-      }
-    }
-  } catch (error) {
-    console.error("Warning: Could not load .env file:", error.message);
-  }
+interface SchemaColumn {
+  dbKey: string;
+  dbType: string;
+  garminKey: string;
 }
 
-// Define the database schema using an array for robustness and maintainability
-const activitySchema = [
+const activitySchema: SchemaColumn[] = [
   { dbKey: "activity_id", dbType: "INTEGER PRIMARY KEY", garminKey: "activityId" },
   { dbKey: "activity_name", dbType: "TEXT", garminKey: "activityName" },
   { dbKey: "description", dbType: "TEXT", garminKey: "description" },
@@ -63,17 +44,15 @@ const activitySchema = [
   { dbKey: "max_running_cadence_spm", dbType: "INTEGER", garminKey: "maxRunningCadenceInStepsPerMinute" },
 ];
 
-// Helper to get a nested property from an object
-const getNested = (obj, path) => {
+const getNested = (obj: any, path: string): any => {
   if (!path) return obj;
   const keys = path.split(".");
   return keys.reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), obj);
 };
 
-// Database setup
-function initializeDatabase() {
+function initializeDatabase(): Promise<sqlite3Pkg.Database> {
   return new Promise((resolve, reject) => {
-    const db = new sqlite3.Database("garmin-data.db", (err) => {
+    const db = new sqlite3.Database("data/garmin-data.db", (err) => {
       if (err) {
         console.error("Error opening database:", err);
         return reject(err);
@@ -81,7 +60,6 @@ function initializeDatabase() {
     });
 
     db.serialize(() => {
-      // Dynamically create the table from the schema
       const columns = activitySchema.map((col) => `${col.dbKey} ${col.dbType}`).join(",\n          ");
       const createTableSql = `
         CREATE TABLE IF NOT EXISTS activities (
@@ -102,10 +80,9 @@ function initializeDatabase() {
   });
 }
 
-// Check if activities already exist in database
-function getLatestActivityDate(db) {
+function getLatestActivityDate(db: sqlite3Pkg.Database): Promise<Date | null> {
   return new Promise((resolve) => {
-    db.get("SELECT MAX(start_time_local) as latest_date FROM activities", (err, row) => {
+    db.get("SELECT MAX(start_time_local) as latest_date FROM activities", (err, row: any) => {
       if (err || !row.latest_date) {
         resolve(null);
       } else {
@@ -115,10 +92,9 @@ function getLatestActivityDate(db) {
   });
 }
 
-// Get activities count
-function getActivitiesCount(db) {
+function getActivitiesCount(db: sqlite3Pkg.Database): Promise<number> {
   return new Promise((resolve) => {
-    db.get("SELECT COUNT(*) as count FROM activities", (err, row) => {
+    db.get("SELECT COUNT(*) as count FROM activities", (err, row: any) => {
       if (err) {
         resolve(0);
       } else {
@@ -128,8 +104,7 @@ function getActivitiesCount(db) {
   });
 }
 
-// Save activities to database
-function saveActivities(db, activities) {
+function saveActivities(db: sqlite3Pkg.Database, activities: any[]): Promise<number> {
   return new Promise((resolve, reject) => {
     db.serialize(() => {
       db.run("BEGIN TRANSACTION", (err) => {
@@ -137,7 +112,6 @@ function saveActivities(db, activities) {
           return reject(new Error("Failed to begin transaction", { cause: err }));
         }
 
-        // Dynamically create the INSERT statement
         const dbKeys = activitySchema.map((col) => col.dbKey).join(", ");
         const placeholders = activitySchema.map(() => "?").join(", ");
         const insertSql = `INSERT OR REPLACE INTO activities (${dbKeys}) VALUES (${placeholders})`;
@@ -147,7 +121,6 @@ function saveActivities(db, activities) {
         let errors = 0;
 
         activities.forEach((activity) => {
-          // Dynamically map Garmin data to the statement parameters
           const params = activitySchema.map((col) => getNested(activity, col.garminKey));
 
           stmt.run(params, (err) => {
@@ -193,29 +166,24 @@ async function main() {
     console.log("🏃‍♂️ Garmin Activities Download - Simplified Version");
     console.log("==================================================");
 
-    // Load environment variables
     loadEnvFile();
 
-    // Check for required credentials
     if (!process.env.GARMIN_USERNAME || !process.env.GARMIN_PASSWORD) {
       throw new Error("Missing GARMIN_USERNAME or GARMIN_PASSWORD in environment variables");
     }
 
-    // Initialize database
     console.log("📊 Setting up database...");
     const db = await initializeDatabase();
 
-    // Check existing data
     const existingCount = await getActivitiesCount(db);
     const latestDate = await getLatestActivityDate(db);
 
     console.log(`📈 Current database has ${existingCount} activities`);
     if (latestDate) {
-      const daysSinceLatest = Math.round((new Date() - latestDate) / (1000 * 60 * 60 * 24));
+      const daysSinceLatest = Math.round((new Date().getTime() - latestDate.getTime()) / (1000 * 60 * 60 * 24));
       console.log(`📅 Latest activity: ${latestDate.toDateString()} (${daysSinceLatest} days ago)`);
     }
 
-    // Connect to Garmin
     console.log("🔐 Connecting to Garmin Connect...");
     const gc = new GarminConnect({
       username: process.env.GARMIN_USERNAME,
@@ -225,12 +193,11 @@ async function main() {
     await gc.login();
     console.log("✅ Successfully logged in to Garmin Connect");
 
-    // Download activities
     console.log("📥 Downloading new activities with pagination...");
 
-    let newActivities = [];
+    let newActivities: any[] = [];
     let start = 0;
-    const limit = 100; // Sensible limit for each page
+    const limit = 100;
     let keepGoing = true;
 
     while (keepGoing) {
@@ -244,7 +211,7 @@ async function main() {
         for (const activity of activities) {
           if (latestActivityDate && new Date(activity.startTimeLocal) <= latestActivityDate) {
             stopNextTime = true;
-            break; // Stop processing this page
+            break;
           }
           newActivities.push(activity);
         }
@@ -266,22 +233,20 @@ async function main() {
       console.log("✅ Activities are already up to date.");
     }
 
-    // Final count
     const finalCount = await getActivitiesCount(db);
     console.log(`📊 Database now contains ${finalCount} total activities`);
 
     db.close();
     console.log("✅ Download completed successfully");
   } catch (error) {
-    console.error("❌ Download failed:", error.message);
-    if (error.stack) {
-      console.error("Stack trace:", error.stack);
+    console.error("❌ Download failed:", (error as Error).message);
+    if ((error as Error).stack) {
+      console.error("Stack trace:", (error as Error).stack);
     }
     process.exit(1);
   }
 }
 
-// Handle cleanup
 process.on("SIGINT", () => {
   console.log("\n⚠️ Download interrupted by user");
   process.exit(0);
@@ -297,5 +262,4 @@ process.on("unhandledRejection", (reason, promise) => {
   process.exit(1);
 });
 
-// Start the download
 main();
