@@ -1,8 +1,14 @@
 import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 export function loadEnvFile() {
   try {
-    const envPath = ".env";
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const projectRoot = path.resolve(__dirname, "../..");
+    const envPath = path.join(projectRoot, ".env");
+
     if (fs.existsSync(envPath)) {
       const envFile = fs.readFileSync(envPath, "utf8");
       const lines = envFile.split("\n");

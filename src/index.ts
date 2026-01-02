@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { GarminDataService } from "./services/garmin-data-service.js";
+import { GarminSyncService } from "./services/garmin-sync-service.js";
 import { loadEnvFile } from "./utils/env-loader.js";
 
 async function main() {
@@ -17,8 +18,10 @@ async function main() {
     });
 
     let dbService: GarminDataService;
+    let syncService: GarminSyncService;
     try {
       dbService = new GarminDataService();
+      syncService = new GarminSyncService();
       console.error("Database service initialized successfully");
     } catch (error) {
       console.error("Failed to initialize database service:", error);
@@ -87,6 +90,61 @@ async function main() {
               {
                 type: "text",
                 text: `Error running query: ${error instanceof Error ? error.message : String(error)}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    server.registerTool(
+      "sync-activities",
+      {
+        title: "Sync Activities from Garmin",
+        description: "Downloads and syncs new activities from Garmin Connect to the local database.",
+        inputSchema: {},
+      },
+      async () => {
+        try {
+          const result = await syncService.syncActivities();
+
+          if (result.error) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Error syncing activities: ${result.error}`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          let message = "";
+          if (result.newActivitiesCount > 0) {
+            message = `Successfully synced ${result.newActivitiesCount} new activities.\n`;
+            message += `Total activities in database: ${result.totalActivities}\n`;
+            if (result.latestActivityDate) {
+              message += `Latest activity: ${result.latestActivityDate.toLocaleDateString()}`;
+            }
+          } else {
+            message = `No new activities found. Database is up to date.\n`;
+            message += `Total activities: ${result.totalActivities}\n`;
+            if (result.latestActivityDate) {
+              message += `Latest activity: ${result.latestActivityDate.toLocaleDateString()}`;
+            }
+          }
+
+          return {
+            content: [{ type: "text", text: message }],
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error syncing activities: ${error instanceof Error ? error.message : String(error)}`,
               },
             ],
             isError: true,

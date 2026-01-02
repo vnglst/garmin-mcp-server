@@ -34,7 +34,8 @@ This is a Garmin MCP (Model Context Protocol) server that provides Claude Deskto
 src/
 ├── index.ts                          # MCP server setup and tool registration
 ├── services/
-│   └── garmin-data-service.ts       # SQLite database access layer
+│   ├── garmin-data-service.ts       # SQLite database access layer (read-only)
+│   └── garmin-sync-service.ts       # Garmin Connect sync service
 └── utils/
     └── env-loader.ts                 # Environment variable loader
 
@@ -49,21 +50,26 @@ data/
 ### Key Components
 
 1. **GarminDataService** ([src/services/garmin-data-service.ts](src/services/garmin-data-service.ts))
-   - Handles all database operations
+   - Handles read-only database operations
    - Opens database in read-only mode
    - Provides `getSchema()` and `runQuery()` methods
    - Database path: `data/garmin-data.db`
 
-2. **MCP Server** ([src/index.ts](src/index.ts))
-   - Registers two tools: `get-schema` and `run-query`
+2. **GarminSyncService** ([src/services/garmin-sync-service.ts](src/services/garmin-sync-service.ts))
+   - Handles syncing activities from Garmin Connect
+   - Manages database writes and updates
+   - Used by both the MCP tool and download script
+   - Returns sync results (new activities count, total activities, latest date)
+
+3. **MCP Server** ([src/index.ts](src/index.ts))
+   - Registers three tools: `get-schema`, `run-query`, and `sync-activities`
    - Uses stdio transport for communication
    - Handles graceful shutdown (SIGINT, SIGTERM, EPIPE)
 
-3. **Data Download** ([scripts/download-data.ts](scripts/download-data.ts))
-   - Connects to Garmin Connect API
-   - Downloads activities with pagination
-   - Stores in SQLite with INSERT OR REPLACE
-   - Schema defined in `activitySchema` array
+4. **Data Download** ([scripts/download-data.ts](scripts/download-data.ts))
+   - CLI wrapper around GarminSyncService
+   - Downloads activities from Garmin Connect API
+   - Can be run via `npm run download`
 
 ## Database Schema
 
@@ -93,25 +99,45 @@ Executes SELECT queries on the database.
 
 **Security**: Only SELECT queries are allowed (enforced in code).
 
+### 3. sync-activities
+Downloads and syncs new activities from Garmin Connect to the local database.
+```json
+{"name": "sync-activities", "arguments": {}}
+```
+
+This tool automatically:
+- Connects to Garmin Connect using credentials from `.env`
+- Downloads only new activities (since the last sync)
+- Saves them to the database
+- Returns a summary of the sync operation (number of new activities, total activities, latest activity date)
+
 ## Data Management
 
-**Download new activities**:
+**Download new activities** (two methods):
+
+1. Via command line:
 ```bash
 npm run download
 ```
 
-This runs [scripts/download-data.ts](scripts/download-data.ts) which:
+2. Via MCP tool (when using with Claude Desktop):
+```json
+{"name": "sync-activities", "arguments": {}}
+```
+
+Both methods use [GarminSyncService](src/services/garmin-sync-service.ts) which:
 - Loads credentials from `.env` (GARMIN_USERNAME, GARMIN_PASSWORD)
 - Connects to Garmin Connect
-- Downloads new activities since the last sync
+- Downloads only new activities since the last sync
 - Stores them in `data/garmin-data.db`
+- Returns sync statistics
 
-**Database location**: Always use `data/garmin-data.db` (relative path handled by GarminDataService)
+**Database location**: Always use `data/garmin-data.db` (relative path handled by both services)
 
 ## Common Tasks
 
 ### Adding a new database field
-1. Update `activitySchema` in [scripts/download-data.ts](scripts/download-data.ts)
+1. Update `activitySchema` in [src/services/garmin-sync-service.ts](src/services/garmin-sync-service.ts)
 2. Delete `data/garmin-data.db` or alter the table
 3. Run `npm run download` to recreate with new schema
 
