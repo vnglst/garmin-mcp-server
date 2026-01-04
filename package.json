@@ -13,7 +13,9 @@
     "dev": "tsc --watch & node --watch dist/index.js",
     "download": "tsx scripts/download-data.ts",
     "test:mcp": "scripts/test-mcp.sh",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [
     "mcp",
@@ -35,8 +37,10 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.0.3",
+    "@vitest/ui": "^4.0.16",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
   },
   "files": [
     "dist"
