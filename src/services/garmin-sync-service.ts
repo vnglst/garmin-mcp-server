@@ -1,7 +1,9 @@
 import GarminConnectPkg from "garmin-connect";
 const { GarminConnect } = GarminConnectPkg;
 import Database from "better-sqlite3";
-import path from "path";
+import { resolveDbPath } from "../utils/db-path.js";
+import { formatError } from "../utils/format-error.js";
+import { suppressConsole } from "../utils/suppress-console.js";
 
 interface SchemaColumn {
   dbKey: string;
@@ -87,8 +89,7 @@ export class GarminSyncService {
   private dbPath: string;
 
   constructor(dbPath: string = "data/garmin-data.db") {
-    const scriptDir = path.dirname(new URL(import.meta.url).pathname);
-    this.dbPath = path.resolve(scriptDir, "../..", dbPath);
+    this.dbPath = resolveDbPath(dbPath, import.meta.url);
   }
 
   private initializeDatabase(): Database.Database {
@@ -148,22 +149,14 @@ export class GarminSyncService {
         password: process.env.GARMIN_PASSWORD,
       });
 
-      const originalConsoleLog = console.log;
-      const originalConsoleError = console.error;
-      console.log = () => {};
-      console.error = () => {};
-
       try {
-        await gc.login();
+        await suppressConsole(() => gc.login());
       } catch (loginError) {
-        const errorMessage = loginError instanceof Error ? loginError.message : String(loginError);
+        const errorMessage = formatError(loginError);
         if (errorMessage.includes("not valid JSON") || errorMessage.includes("login page")) {
           throw new Error("Garmin authentication failed. Please verify your GARMIN_USERNAME and GARMIN_PASSWORD in .env file are correct. You may also need to log in to Garmin Connect via a web browser first.");
         }
         throw loginError;
-      } finally {
-        console.log = originalConsoleLog;
-        console.error = originalConsoleError;
       }
 
       let newActivities: any[] = [];
@@ -213,7 +206,7 @@ export class GarminSyncService {
         newActivitiesCount: 0,
         totalActivities: 0,
         latestActivityDate: null,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatError(error),
       };
     } finally {
       if (db) {
