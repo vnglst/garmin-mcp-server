@@ -39,3 +39,6 @@ data/
 
 # Demo videos
 assets/demos/*.mov
+
+# Claude
+.claude/
