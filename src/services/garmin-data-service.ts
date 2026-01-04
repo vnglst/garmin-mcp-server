@@ -1,4 +1,4 @@
-import sqlite3 from "sqlite3";
+import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 
@@ -14,62 +14,30 @@ export class GarminDataService {
     }
   }
 
-  private async getDatabase(): Promise<sqlite3.Database> {
-    return new Promise((resolve, reject) => {
-      const db = new sqlite3.Database(this.dbPath, sqlite3.OPEN_READONLY, (err) => {
-        if (err) {
-          reject(new Error(`Failed to open database: ${err.message}`));
-          return;
-        }
-        resolve(db);
-      });
-    });
+  private getDatabase(): Database.Database {
+    return new Database(this.dbPath, { readonly: true });
   }
 
-  private async closeDatabase(db: sqlite3.Database): Promise<void> {
-    return new Promise((resolve) => {
-      db.close(() => resolve());
-    });
-  }
-
-  async getSchema(): Promise<any[]> {
-    const db = await this.getDatabase();
+  getSchema(): any[] {
+    const db = this.getDatabase();
     try {
-      const rows = await new Promise<any[]>((resolve, reject) => {
-        const sql = `SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';`;
-        db.all(sql, [], (err, rows) => {
-          if (err) {
-            reject(new Error(`Database query error: ${err.message}`));
-            return;
-          }
-          resolve(rows || []);
-        });
-      });
-      return rows;
+      const sql = `SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';`;
+      return db.prepare(sql).all();
     } finally {
-      await this.closeDatabase(db);
+      db.close();
     }
   }
 
-  async runQuery(query: string): Promise<any[]> {
+  runQuery(query: string): any[] {
     if (!query.trim().toLowerCase().startsWith("select")) {
       throw new Error("Only SELECT queries are allowed.");
     }
 
-    const db = await this.getDatabase();
+    const db = this.getDatabase();
     try {
-      const rows = await new Promise<any[]>((resolve, reject) => {
-        db.all(query, [], (err, rows) => {
-          if (err) {
-            reject(new Error(`Database query error: ${err.message}`));
-            return;
-          }
-          resolve(rows || []);
-        });
-      });
-      return rows;
+      return db.prepare(query).all();
     } finally {
-      await this.closeDatabase(db);
+      db.close();
     }
   }
 }

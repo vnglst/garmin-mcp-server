@@ -1,7 +1,6 @@
 import GarminConnectPkg from "garmin-connect";
 const { GarminConnect } = GarminConnectPkg;
-import sqlite3Pkg from "sqlite3";
-const sqlite3 = sqlite3Pkg;
+import Database from "better-sqlite3";
 import path from "path";
 
 interface SchemaColumn {
@@ -92,127 +91,57 @@ export class GarminSyncService {
     this.dbPath = path.resolve(scriptDir, "../..", dbPath);
   }
 
-  private initializeDatabase(): Promise<sqlite3Pkg.Database> {
-    return new Promise((resolve, reject) => {
-      const db = new sqlite3.Database(this.dbPath, (err) => {
-        if (err) {
-          return reject(new Error(`Error opening database: ${err.message}`));
-        }
-
-        db.serialize(() => {
-          const columns = activitySchema.map((col) => `${col.dbKey} ${col.dbType}`).join(",\n          ");
-          const createTableSql = `
-            CREATE TABLE IF NOT EXISTS activities (
-              ${columns}
-            )
-          `;
-
-          db.run(createTableSql, (runErr) => {
-            if (runErr) {
-              reject(new Error(`Error creating activities table: ${runErr.message}`));
-            } else {
-              resolve(db);
-            }
-          });
-        });
-      });
-    });
+  private initializeDatabase(): Database.Database {
+    const db = new Database(this.dbPath);
+    const columns = activitySchema.map((col) => `${col.dbKey} ${col.dbType}`).join(",\n          ");
+    const createTableSql = `
+      CREATE TABLE IF NOT EXISTS activities (
+        ${columns}
+      )
+    `;
+    db.exec(createTableSql);
+    return db;
   }
 
-  private getLatestActivityDate(db: sqlite3Pkg.Database): Promise<Date | null> {
-    return new Promise((resolve) => {
-      db.get("SELECT MAX(start_time_local) as latest_date FROM activities", (err, row: any) => {
-        if (err || !row?.latest_date) {
-          resolve(null);
-        } else {
-          resolve(new Date(row.latest_date));
-        }
-      });
-    });
+  private getLatestActivityDate(db: Database.Database): Date | null {
+    const row = db.prepare("SELECT MAX(start_time_local) as latest_date FROM activities").get() as any;
+    if (!row?.latest_date) {
+      return null;
+    }
+    return new Date(row.latest_date);
   }
 
-  private getActivitiesCount(db: sqlite3Pkg.Database): Promise<number> {
-    return new Promise((resolve) => {
-      db.get("SELECT COUNT(*) as count FROM activities", (err, row: any) => {
-        if (err || !row) {
-          resolve(0);
-        } else {
-          resolve(row.count || 0);
-        }
-      });
-    });
+  private getActivitiesCount(db: Database.Database): number {
+    const row = db.prepare("SELECT COUNT(*) as count FROM activities").get() as any;
+    return row?.count || 0;
   }
 
-  private saveActivities(db: sqlite3Pkg.Database, activities: any[]): Promise<number> {
-    return new Promise((resolve, reject) => {
-      db.serialize(() => {
-        db.run("BEGIN TRANSACTION", (err) => {
-          if (err) {
-            return reject(new Error("Failed to begin transaction", { cause: err }));
-          }
+  private saveActivities(db: Database.Database, activities: any[]): number {
+    const dbKeys = activitySchema.map((col) => col.dbKey).join(", ");
+    const placeholders = activitySchema.map(() => "?").join(", ");
+    const insertSql = `INSERT OR REPLACE INTO activities (${dbKeys}) VALUES (${placeholders})`;
+    const stmt = db.prepare(insertSql);
 
-          const dbKeys = activitySchema.map((col) => col.dbKey).join(", ");
-          const placeholders = activitySchema.map(() => "?").join(", ");
-          const insertSql = `INSERT OR REPLACE INTO activities (${dbKeys}) VALUES (${placeholders})`;
-          const stmt = db.prepare(insertSql);
-
-          let saved = 0;
-          let errors = 0;
-
-          activities.forEach((activity) => {
-            const params = activitySchema.map((col) => getNested(activity, col.garminKey));
-
-            stmt.run(params, (err) => {
-              if (err) {
-                errors++;
-              } else {
-                saved++;
-              }
-            });
-          });
-
-          stmt.finalize((err) => {
-            if (err) {
-              return db.run("ROLLBACK", () => {
-                reject(new Error("Failed to finalize statement", { cause: err }));
-              });
-            }
-
-            if (errors > 0) {
-              return db.run("ROLLBACK", () => {
-                reject(new Error(`${errors} activities failed to save.`));
-              });
-            }
-
-            db.run("COMMIT", (commitErr) => {
-              if (commitErr) {
-                return db.run("ROLLBACK", () => {
-                  reject(new Error("Failed to commit transaction", { cause: commitErr }));
-                });
-              }
-              resolve(saved);
-            });
-          });
-        });
-      });
+    const insertMany = db.transaction((items: any[]) => {
+      for (const activity of items) {
+        const params = activitySchema.map((col) => getNested(activity, col.garminKey));
+        stmt.run(...params);
+      }
     });
-  }
 
-  private closeDatabase(db: sqlite3Pkg.Database): Promise<void> {
-    return new Promise((resolve) => {
-      db.close(() => resolve());
-    });
+    insertMany(activities);
+    return activities.length;
   }
 
   async syncActivities(): Promise<SyncResult> {
-    let db: sqlite3Pkg.Database | null = null;
+    let db: Database.Database | null = null;
 
     try {
       if (!process.env.GARMIN_USERNAME || !process.env.GARMIN_PASSWORD) {
         throw new Error("Missing GARMIN_USERNAME or GARMIN_PASSWORD in environment variables");
       }
 
-      db = await this.initializeDatabase();
+      db = this.initializeDatabase();
 
       const gc = new GarminConnect({
         username: process.env.GARMIN_USERNAME,
@@ -246,7 +175,7 @@ export class GarminSyncService {
         const activities = await gc.getActivities(start, limit);
 
         if (activities && activities.length > 0) {
-          const latestActivityDate = await this.getLatestActivityDate(db);
+          const latestActivityDate = this.getLatestActivityDate(db);
           let stopNextTime = false;
 
           for (const activity of activities) {
@@ -268,11 +197,11 @@ export class GarminSyncService {
       }
 
       if (newActivities.length > 0) {
-        await this.saveActivities(db, newActivities);
+        this.saveActivities(db, newActivities);
       }
 
-      const totalActivities = await this.getActivitiesCount(db);
-      const latestActivityDate = await this.getLatestActivityDate(db);
+      const totalActivities = this.getActivitiesCount(db);
+      const latestActivityDate = this.getLatestActivityDate(db);
 
       return {
         newActivitiesCount: newActivities.length,
@@ -288,7 +217,7 @@ export class GarminSyncService {
       };
     } finally {
       if (db) {
-        await this.closeDatabase(db);
+        db.close();
       }
     }
   }
