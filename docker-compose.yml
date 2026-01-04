@@ -1,8 +1,6 @@
 services:
   garmin-mcp-server:
-    image: ghcr.io/vnglst/garmin-mcp-server:latest
-    # Or build locally:
-    # build: .
+    build: .
     container_name: garmin-mcp-server
     restart: unless-stopped
     ports:
