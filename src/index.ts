@@ -6,6 +6,26 @@ import { z } from "zod";
 import { GarminDataService } from "./services/garmin-data-service.js";
 import { GarminSyncService } from "./services/garmin-sync-service.js";
 import { loadEnvFile } from "./utils/env-loader.js";
+import { formatError } from "./utils/format-error.js";
+
+type ToolResponse = { content: { type: "text"; text: string }[]; isError?: boolean };
+
+function success(text: string): ToolResponse {
+  return { content: [{ type: "text", text }] };
+}
+
+function error(text: string): ToolResponse {
+  return { content: [{ type: "text", text }], isError: true };
+}
+
+function toMarkdownTable(rows: Record<string, unknown>[]): string {
+  if (rows.length === 0) return "Query returned no results.";
+  const headers = Object.keys(rows[0]);
+  const headerLine = `| ${headers.join(" | ")} |`;
+  const separatorLine = `| ${headers.map(() => "---").join(" | ")} |`;
+  const bodyLines = rows.map((row) => `| ${headers.map((h) => row[h]).join(" | ")} |`);
+  return [headerLine, separatorLine, ...bodyLines].join("\n");
+}
 
 async function main() {
   try {
@@ -37,23 +57,13 @@ async function main() {
       },
       async () => {
         try {
-          const schema = await dbService.getSchema();
+          const schema = dbService.getSchema();
           const schemaText = schema
-            .map((table: any) => `**Table: ${table.name}**\n\`\`\`sql\n${table.sql}\n\`\`\``)
+            .map((table) => `**Table: ${table.name}**\n\`\`\`sql\n${table.sql}\n\`\`\``)
             .join("\n\n");
-          return {
-            content: [{ type: "text", text: schemaText }],
-          };
-        } catch (error) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Error fetching schema: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-            isError: true,
-          };
+          return success(schemaText);
+        } catch (err) {
+          return error(`Error fetching schema: ${formatError(err)}`);
         }
       }
     );
@@ -69,31 +79,10 @@ async function main() {
       },
       async (args) => {
         try {
-          const results = await dbService.runQuery(args.query);
-          if (results.length === 0) {
-            return {
-              content: [{ type: "text", text: "Query returned no results." }],
-            };
-          }
-          const headers = Object.keys(results[0]);
-          const headerLine = `| ${headers.join(" | ")} |`;
-          const separatorLine = `| ${headers.map(() => "---").join(" | ")} |`;
-          const bodyLines = results.map((row) => `| ${headers.map((h) => row[h]).join(" | ")} |`);
-          const table = [headerLine, separatorLine, ...bodyLines].join("\n");
-
-          return {
-            content: [{ type: "text", text: table }],
-          };
-        } catch (error) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Error running query: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-            isError: true,
-          };
+          const results = dbService.runQuery(args.query);
+          return success(toMarkdownTable(results));
+        } catch (err) {
+          return error(`Error running query: ${formatError(err)}`);
         }
       }
     );
@@ -110,45 +99,18 @@ async function main() {
           const result = await syncService.syncActivities();
 
           if (result.error) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Error syncing activities: ${result.error}`,
-                },
-              ],
-              isError: true,
-            };
+            return error(`Error syncing activities: ${result.error}`);
           }
 
-          let message = "";
-          if (result.newActivitiesCount > 0) {
-            message = `Successfully synced ${result.newActivitiesCount} new activities.\n`;
-            message += `Total activities in database: ${result.totalActivities}\n`;
-            if (result.latestActivityDate) {
-              message += `Latest activity: ${result.latestActivityDate.toLocaleDateString()}`;
-            }
-          } else {
-            message = `No new activities found. Database is up to date.\n`;
-            message += `Total activities: ${result.totalActivities}\n`;
-            if (result.latestActivityDate) {
-              message += `Latest activity: ${result.latestActivityDate.toLocaleDateString()}`;
-            }
-          }
-
-          return {
-            content: [{ type: "text", text: message }],
-          };
-        } catch (error) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Error syncing activities: ${error instanceof Error ? error.message : String(error)}`,
-              },
-            ],
-            isError: true,
-          };
+          const header = result.newActivitiesCount > 0
+            ? `Successfully synced ${result.newActivitiesCount} new activities.`
+            : "No new activities found. Database is up to date.";
+          const latest = result.latestActivityDate
+            ? `\nLatest activity: ${result.latestActivityDate.toLocaleDateString()}`
+            : "";
+          return success(`${header}\nTotal activities: ${result.totalActivities}${latest}`);
+        } catch (err) {
+          return error(`Error syncing activities: ${formatError(err)}`);
         }
       }
     );
