@@ -2,6 +2,9 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import http from "http";
 import { z } from "zod";
 import { GarminDataService } from "./services/garmin-data-service.js";
 import { GarminSyncService } from "./services/garmin-sync-service.js";
@@ -27,15 +30,213 @@ function toMarkdownTable(rows: Record<string, unknown>[]): string {
   return [headerLine, separatorLine, ...bodyLines].join("\n");
 }
 
+function createMcpServer(dbService: GarminDataService, syncService: GarminSyncService): McpServer {
+  const server = new McpServer({
+    name: "garmin-mcp-server",
+    version: "1.0.0",
+  });
+
+  server.registerTool(
+    "get-schema",
+    {
+      title: "Get Database Schema",
+      description: "Fetches the schema of the available tables in the database.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const schema = dbService.getSchema();
+        const schemaText = schema
+          .map((table) => `**Table: ${table.name}**\n\`\`\`sql\n${table.sql}\n\`\`\``)
+          .join("\n\n");
+        return success(schemaText);
+      } catch (err) {
+        return error(`Error fetching schema: ${formatError(err)}`);
+      }
+    }
+  );
+
+  server.registerTool(
+    "run-query",
+    {
+      title: "Run SELECT Query",
+      description: "Runs a SELECT query against the database.",
+      inputSchema: {
+        query: z.string().describe("The SELECT query to execute."),
+      },
+    },
+    async (args) => {
+      try {
+        const results = dbService.runQuery(args.query);
+        return success(toMarkdownTable(results));
+      } catch (err) {
+        return error(`Error running query: ${formatError(err)}`);
+      }
+    }
+  );
+
+  server.registerTool(
+    "sync-activities",
+    {
+      title: "Sync Activities from Garmin",
+      description: "Downloads and syncs new activities from Garmin Connect to the local database.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const result = await syncService.syncActivities();
+
+        if (result.error) {
+          return error(`Error syncing activities: ${result.error}`);
+        }
+
+        const header = result.newActivitiesCount > 0
+          ? `Successfully synced ${result.newActivitiesCount} new activities.`
+          : "No new activities found. Database is up to date.";
+        const latest = result.latestActivityDate
+          ? `\nLatest activity: ${result.latestActivityDate.toLocaleDateString()}`
+          : "";
+        return success(`${header}\nTotal activities: ${result.totalActivities}${latest}`);
+      } catch (err) {
+        return error(`Error syncing activities: ${formatError(err)}`);
+      }
+    }
+  );
+
+  return server;
+}
+
+function validateApiKey(req: http.IncomingMessage): boolean {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) return true;
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return false;
+
+  const [type, key] = authHeader.split(" ");
+  if (type !== "Bearer") return false;
+
+  return key === apiKey;
+}
+
+function sendJson(res: http.ServerResponse, statusCode: number, data: unknown) {
+  res.writeHead(statusCode, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(data));
+}
+
+async function runHttpServer(dbService: GarminDataService, syncService: GarminSyncService) {
+  const port = parseInt(process.env.PORT || "3000", 10);
+  const transports = new Map<string, StreamableHTTPServerTransport>();
+
+  const httpServer = http.createServer(async (req, res) => {
+    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Mcp-Session-Id");
+
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (url.pathname === "/health") {
+      sendJson(res, 200, {
+        status: "ok",
+        timestamp: new Date().toISOString(),
+        version: "1.0.0",
+      });
+      return;
+    }
+
+    if (url.pathname === "/mcp" || url.pathname === "/") {
+      if (!validateApiKey(req)) {
+        sendJson(res, 401, { error: "Unauthorized", message: "Invalid or missing API key" });
+        return;
+      }
+
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+      if (req.method === "POST") {
+        let transport = sessionId ? transports.get(sessionId) : undefined;
+
+        if (!transport) {
+          transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => crypto.randomUUID(),
+            onsessioninitialized: (newSessionId) => {
+              transports.set(newSessionId, transport!);
+            },
+          });
+
+          transport.onclose = () => {
+            if (sessionId) {
+              transports.delete(sessionId);
+            }
+          };
+
+          const server = createMcpServer(dbService, syncService);
+          await server.connect(transport);
+        }
+
+        await transport.handleRequest(req, res);
+        return;
+      }
+
+      if (req.method === "GET") {
+        if (!sessionId || !transports.has(sessionId)) {
+          sendJson(res, 400, { error: "Bad Request", message: "Missing or invalid session ID" });
+          return;
+        }
+
+        const transport = transports.get(sessionId)!;
+        await transport.handleRequest(req, res);
+        return;
+      }
+
+      if (req.method === "DELETE") {
+        if (sessionId && transports.has(sessionId)) {
+          const transport = transports.get(sessionId)!;
+          await transport.close();
+          transports.delete(sessionId);
+        }
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+    }
+
+    sendJson(res, 404, { error: "Not Found" });
+  });
+
+  httpServer.listen(port, () => {
+    console.error(`Garmin MCP Server running on http://0.0.0.0:${port}`);
+    console.error("Endpoints:");
+    console.error(`  MCP: POST/GET/DELETE /mcp`);
+    console.error(`  Health: GET /health`);
+    if (process.env.API_KEY) {
+      console.error("API key authentication enabled");
+    } else {
+      console.error("Warning: No API_KEY set, server is unprotected");
+    }
+  });
+
+  return httpServer;
+}
+
+async function runStdioServer(dbService: GarminDataService, syncService: GarminSyncService) {
+  const server = createMcpServer(dbService, syncService);
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+
+  console.error("Garmin MCP Server running on stdio");
+  console.error("Ready to receive requests from Claude Desktop");
+}
+
 async function main() {
   try {
     loadEnvFile();
     console.error("Environment variables loaded");
-
-    const server = new McpServer({
-      name: "garmin-mcp-server",
-      version: "1.0.0",
-    });
 
     let dbService: GarminDataService;
     let syncService: GarminSyncService;
@@ -43,85 +244,20 @@ async function main() {
       dbService = new GarminDataService();
       syncService = new GarminSyncService();
       console.error("Database service initialized successfully");
-    } catch (error) {
-      console.error("Failed to initialize database service:", error);
+    } catch (err) {
+      console.error("Failed to initialize database service:", err);
       process.exit(1);
     }
 
-    server.registerTool(
-      "get-schema",
-      {
-        title: "Get Database Schema",
-        description: "Fetches the schema of the available tables in the database.",
-        inputSchema: {},
-      },
-      async () => {
-        try {
-          const schema = dbService.getSchema();
-          const schemaText = schema
-            .map((table) => `**Table: ${table.name}**\n\`\`\`sql\n${table.sql}\n\`\`\``)
-            .join("\n\n");
-          return success(schemaText);
-        } catch (err) {
-          return error(`Error fetching schema: ${formatError(err)}`);
-        }
-      }
-    );
+    const useHttp = process.env.PORT || process.env.HTTP_MODE === "true";
 
-    server.registerTool(
-      "run-query",
-      {
-        title: "Run SELECT Query",
-        description: "Runs a SELECT query against the database.",
-        inputSchema: {
-          query: z.string().describe("The SELECT query to execute."),
-        },
-      },
-      async (args) => {
-        try {
-          const results = dbService.runQuery(args.query);
-          return success(toMarkdownTable(results));
-        } catch (err) {
-          return error(`Error running query: ${formatError(err)}`);
-        }
-      }
-    );
-
-    server.registerTool(
-      "sync-activities",
-      {
-        title: "Sync Activities from Garmin",
-        description: "Downloads and syncs new activities from Garmin Connect to the local database.",
-        inputSchema: {},
-      },
-      async () => {
-        try {
-          const result = await syncService.syncActivities();
-
-          if (result.error) {
-            return error(`Error syncing activities: ${result.error}`);
-          }
-
-          const header = result.newActivitiesCount > 0
-            ? `Successfully synced ${result.newActivitiesCount} new activities.`
-            : "No new activities found. Database is up to date.";
-          const latest = result.latestActivityDate
-            ? `\nLatest activity: ${result.latestActivityDate.toLocaleDateString()}`
-            : "";
-          return success(`${header}\nTotal activities: ${result.totalActivities}${latest}`);
-        } catch (err) {
-          return error(`Error syncing activities: ${formatError(err)}`);
-        }
-      }
-    );
-
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-
-    console.error("Garmin MCP Server running on stdio");
-    console.error("Ready to receive requests from Claude Desktop");
-  } catch (error) {
-    console.error("Failed to start server:", error);
+    if (useHttp) {
+      await runHttpServer(dbService, syncService);
+    } else {
+      await runStdioServer(dbService, syncService);
+    }
+  } catch (err) {
+    console.error("Failed to start server:", err);
     process.exit(1);
   }
 }
@@ -136,11 +272,11 @@ process.on("SIGTERM", async () => {
   process.exit(0);
 });
 
-process.on("uncaughtException", (error) => {
-  if ((error as any).code === "EPIPE") {
+process.on("uncaughtException", (err) => {
+  if ((err as NodeJS.ErrnoException).code === "EPIPE") {
     process.exit(0);
   } else {
-    console.error("Uncaught exception:", error);
+    console.error("Uncaught exception:", err);
     process.exit(1);
   }
 });
@@ -150,7 +286,7 @@ process.on("unhandledRejection", (reason, promise) => {
   process.exit(1);
 });
 
-main().catch((error) => {
-  console.error("Fatal error in main():", error);
+main().catch((err) => {
+  console.error("Fatal error in main():", err);
   process.exit(1);
 });
