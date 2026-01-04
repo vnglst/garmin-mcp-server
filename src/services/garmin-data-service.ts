@@ -35,7 +35,7 @@ export class GarminDataService {
   async getSchema(): Promise<any[]> {
     const db = await this.getDatabase();
     try {
-      return new Promise((resolve, reject) => {
+      const rows = await new Promise<any[]>((resolve, reject) => {
         const sql = `SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';`;
         db.all(sql, [], (err, rows) => {
           if (err) {
@@ -45,6 +45,7 @@ export class GarminDataService {
           resolve(rows || []);
         });
       });
+      return rows;
     } finally {
       await this.closeDatabase(db);
     }
@@ -57,7 +58,7 @@ export class GarminDataService {
 
     const db = await this.getDatabase();
     try {
-      return new Promise((resolve, reject) => {
+      const rows = await new Promise<any[]>((resolve, reject) => {
         db.all(query, [], (err, rows) => {
           if (err) {
             reject(new Error(`Database query error: ${err.message}`));
@@ -66,6 +67,7 @@ export class GarminDataService {
           resolve(rows || []);
         });
       });
+      return rows;
     } finally {
       await this.closeDatabase(db);
     }

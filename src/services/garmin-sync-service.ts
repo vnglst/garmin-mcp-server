@@ -1,7 +1,7 @@
 import GarminConnectPkg from "garmin-connect";
 const { GarminConnect } = GarminConnectPkg;
 import sqlite3Pkg from "sqlite3";
-const sqlite3 = sqlite3Pkg.verbose();
+const sqlite3 = sqlite3Pkg;
 import path from "path";
 
 interface SchemaColumn {
@@ -98,22 +98,22 @@ export class GarminSyncService {
         if (err) {
           return reject(new Error(`Error opening database: ${err.message}`));
         }
-      });
 
-      db.serialize(() => {
-        const columns = activitySchema.map((col) => `${col.dbKey} ${col.dbType}`).join(",\n          ");
-        const createTableSql = `
-          CREATE TABLE IF NOT EXISTS activities (
-            ${columns}
-          )
-        `;
+        db.serialize(() => {
+          const columns = activitySchema.map((col) => `${col.dbKey} ${col.dbType}`).join(",\n          ");
+          const createTableSql = `
+            CREATE TABLE IF NOT EXISTS activities (
+              ${columns}
+            )
+          `;
 
-        db.run(createTableSql, (err) => {
-          if (err) {
-            reject(new Error(`Error creating activities table: ${err.message}`));
-          } else {
-            resolve(db);
-          }
+          db.run(createTableSql, (runErr) => {
+            if (runErr) {
+              reject(new Error(`Error creating activities table: ${runErr.message}`));
+            } else {
+              resolve(db);
+            }
+          });
         });
       });
     });
@@ -122,7 +122,7 @@ export class GarminSyncService {
   private getLatestActivityDate(db: sqlite3Pkg.Database): Promise<Date | null> {
     return new Promise((resolve) => {
       db.get("SELECT MAX(start_time_local) as latest_date FROM activities", (err, row: any) => {
-        if (err || !row.latest_date) {
+        if (err || !row?.latest_date) {
           resolve(null);
         } else {
           resolve(new Date(row.latest_date));
@@ -134,7 +134,7 @@ export class GarminSyncService {
   private getActivitiesCount(db: sqlite3Pkg.Database): Promise<number> {
     return new Promise((resolve) => {
       db.get("SELECT COUNT(*) as count FROM activities", (err, row: any) => {
-        if (err) {
+        if (err || !row) {
           resolve(0);
         } else {
           resolve(row.count || 0);
