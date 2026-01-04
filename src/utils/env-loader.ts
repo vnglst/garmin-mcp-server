@@ -18,8 +18,12 @@ export function loadEnvFile() {
         if (trimmedLine && !trimmedLine.startsWith("#")) {
           const [key, ...valueParts] = trimmedLine.split("=");
           if (key && valueParts.length > 0) {
+            const normalizedKey = key.trim();
+            if (normalizedKey.length === 0) continue;
+            if (process.env[normalizedKey] !== undefined) continue;
+
             const value = valueParts.join("=").replace(/^["']|["']$/g, "");
-            process.env[key.trim()] = value;
+            process.env[normalizedKey] = value;
           }
         }
       }

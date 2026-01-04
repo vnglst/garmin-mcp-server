@@ -136,4 +136,26 @@ TEST_VAR=test_value
       }
     }
   });
+
+  it("should not override existing environment variables", () => {
+    const envContent = `TEST_EXISTING=from_dotenv`;
+
+    const projectRoot = path.resolve(__dirname, "../../..");
+    const envPath = path.join(projectRoot, ".env");
+    const originalContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8") : null;
+
+    try {
+      process.env.TEST_EXISTING = "from_process";
+      fs.writeFileSync(envPath, envContent, "utf8");
+      loadEnvFile();
+
+      expect(process.env.TEST_EXISTING).toBe("from_process");
+    } finally {
+      if (originalContent !== null) {
+        fs.writeFileSync(envPath, originalContent, "utf8");
+      } else if (fs.existsSync(envPath)) {
+        fs.unlinkSync(envPath);
+      }
+    }
+  });
 });

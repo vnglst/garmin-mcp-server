@@ -45,9 +45,7 @@ describe("GarminDataService", () => {
 
   describe("constructor", () => {
     it("should throw error if database file does not exist", () => {
-      expect(() => new GarminDataService("data/nonexistent.db")).toThrow(
-        /Database file not found/
-      );
+      expect(() => new GarminDataService("data/nonexistent.db")).toThrow(/Database file not found/);
     });
 
     it("should create service instance with valid database path", () => {
@@ -82,9 +80,7 @@ describe("GarminDataService", () => {
 
     it("should execute SELECT query with WHERE clause", () => {
       const service = new GarminDataService("data/test-garmin-data.db");
-      const results = service.runQuery(
-        "SELECT * FROM activities WHERE activity_id = 2"
-      );
+      const results = service.runQuery("SELECT * FROM activities WHERE activity_id = 2");
 
       expect(results).toBeInstanceOf(Array);
       expect(results.length).toBe(1);
@@ -103,17 +99,17 @@ describe("GarminDataService", () => {
     it("should throw error for non-SELECT queries", () => {
       const service = new GarminDataService("data/test-garmin-data.db");
 
-      expect(() =>
-        service.runQuery("DELETE FROM activities WHERE activity_id = 1")
-      ).toThrow("Only SELECT queries are allowed");
+      expect(() => service.runQuery("DELETE FROM activities WHERE activity_id = 1")).toThrow(
+        "Only SELECT queries are allowed"
+      );
 
-      expect(() =>
-        service.runQuery("UPDATE activities SET activity_name = 'Test'")
-      ).toThrow("Only SELECT queries are allowed");
+      expect(() => service.runQuery("UPDATE activities SET activity_name = 'Test'")).toThrow(
+        "Only SELECT queries are allowed"
+      );
 
-      expect(() =>
-        service.runQuery("INSERT INTO activities VALUES (4, 'Test', 0, 0, '')")
-      ).toThrow("Only SELECT queries are allowed");
+      expect(() => service.runQuery("INSERT INTO activities VALUES (4, 'Test', 0, 0, '')")).toThrow(
+        "Only SELECT queries are allowed"
+      );
     });
 
     it("should handle queries with leading whitespace", () => {
@@ -132,11 +128,35 @@ describe("GarminDataService", () => {
       expect(results.length).toBe(1);
     });
 
-    it("should return empty array for query with no matches", () => {
+    it("should allow WITH ... SELECT queries", () => {
       const service = new GarminDataService("data/test-garmin-data.db");
       const results = service.runQuery(
-        "SELECT * FROM activities WHERE activity_id = 999"
+        "WITH recent AS (SELECT * FROM activities ORDER BY start_time_local DESC) SELECT * FROM recent LIMIT 1"
       );
+
+      expect(results).toBeInstanceOf(Array);
+      expect(results.length).toBe(1);
+    });
+
+    it("should reject multi-statement queries", () => {
+      const service = new GarminDataService("data/test-garmin-data.db");
+
+      expect(() => service.runQuery("SELECT 1; SELECT 2")).toThrow(/single SELECT statement/i);
+    });
+
+    it("should reject WITH-based write attempts", () => {
+      const service = new GarminDataService("data/test-garmin-data.db");
+
+      expect(() =>
+        service.runQuery(
+          "WITH x AS (SELECT 1) UPDATE activities SET activity_name = 'X' WHERE activity_id = 1 RETURNING *"
+        )
+      ).toThrow("Only SELECT queries are allowed");
+    });
+
+    it("should return empty array for query with no matches", () => {
+      const service = new GarminDataService("data/test-garmin-data.db");
+      const results = service.runQuery("SELECT * FROM activities WHERE activity_id = 999");
 
       expect(results).toBeInstanceOf(Array);
       expect(results.length).toBe(0);

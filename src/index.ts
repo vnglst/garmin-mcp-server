@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import crypto from "crypto";
 import http from "http";
 import { z } from "zod";
 import { GarminDataService } from "./services/garmin-data-service.js";
@@ -90,9 +91,10 @@ function createMcpServer(dbService: GarminDataService, syncService: GarminSyncSe
           return error(`Error syncing activities: ${result.error}`);
         }
 
-        const header = result.newActivitiesCount > 0
-          ? `Successfully synced ${result.newActivitiesCount} new activities.`
-          : "No new activities found. Database is up to date.";
+        const header =
+          result.newActivitiesCount > 0
+            ? `Successfully synced ${result.newActivitiesCount} new activities.`
+            : "No new activities found. Database is up to date.";
         const latest = result.latestActivityDate
           ? `\nLatest activity: ${result.latestActivityDate.toLocaleDateString()}`
           : "";
@@ -113,10 +115,16 @@ function validateApiKey(req: http.IncomingMessage): boolean {
   const authHeader = req.headers.authorization;
   if (!authHeader) return false;
 
-  const [type, key] = authHeader.split(" ");
-  if (type !== "Bearer") return false;
+  const match = authHeader.trim().match(/^Bearer\s+(.+)$/i);
+  if (!match) return false;
 
-  return key === apiKey;
+  const providedKey = match[1].trim();
+  if (!providedKey) return false;
+
+  const expected = Buffer.from(apiKey, "utf8");
+  const provided = Buffer.from(providedKey, "utf8");
+  if (expected.length !== provided.length) return false;
+  return crypto.timingSafeEqual(expected, provided);
 }
 
 function sendJson(res: http.ServerResponse, statusCode: number, data: unknown) {
@@ -127,15 +135,39 @@ function sendJson(res: http.ServerResponse, statusCode: number, data: unknown) {
 async function runHttpServer(dbService: GarminDataService, syncService: GarminSyncService) {
   const port = parseInt(process.env.PORT || "3000", 10);
   const transports = new Map<string, StreamableHTTPServerTransport>();
+  const maxSessions = Math.max(1, parseInt(process.env.MAX_SESSIONS || "100", 10) || 100);
+
+  const configuredCorsOrigins = (process.env.CORS_ORIGIN || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  function applyCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse) {
+    if (configuredCorsOrigins.length === 0) return;
+
+    const origin = req.headers.origin;
+    if (!origin) return;
+
+    if (configuredCorsOrigins.includes("*")) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    } else if (configuredCorsOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    } else {
+      return;
+    }
+
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Mcp-Session-Id");
+  }
 
   const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Mcp-Session-Id");
+    applyCorsHeaders(req, res);
 
     if (req.method === "OPTIONS") {
+      applyCorsHeaders(req, res);
       res.writeHead(204);
       res.end();
       return;
@@ -162,17 +194,25 @@ async function runHttpServer(dbService: GarminDataService, syncService: GarminSy
         let transport = sessionId ? transports.get(sessionId) : undefined;
 
         if (!transport) {
+          if (transports.size >= maxSessions) {
+            sendJson(res, 503, {
+              error: "Service Unavailable",
+              message: "Too many active sessions",
+            });
+            return;
+          }
+
+          let activeSessionId: string | null = null;
           transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => crypto.randomUUID(),
             onsessioninitialized: (newSessionId) => {
+              activeSessionId = newSessionId;
               transports.set(newSessionId, transport!);
             },
           });
 
           transport.onclose = () => {
-            if (sessionId) {
-              transports.delete(sessionId);
-            }
+            if (activeSessionId) transports.delete(activeSessionId);
           };
 
           const server = createMcpServer(dbService, syncService);

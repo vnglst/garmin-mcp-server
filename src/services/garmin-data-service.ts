@@ -33,13 +33,45 @@ export class GarminDataService {
   }
 
   runQuery(query: string): Record<string, unknown>[] {
-    if (!query.trim().toLowerCase().startsWith("select")) {
+    const trimmed = query.trim();
+    if (trimmed.length === 0) {
+      throw new Error("Query cannot be empty.");
+    }
+
+    // Avoid pathological memory usage from extremely large requests.
+    const maxChars = Math.max(1, parseInt(process.env.MAX_QUERY_CHARS || "50000", 10) || 50000);
+    if (trimmed.length > maxChars) {
+      throw new Error(`Query too large (max ${maxChars} characters).`);
+    }
+
+    // Allow a single statement only. Trailing semicolons are fine.
+    const withoutTrailingSemicolons = trimmed.replace(/;+\s*$/, "");
+    if (withoutTrailingSemicolons.includes(";")) {
+      throw new Error("Only a single SELECT statement is allowed.");
+    }
+
+    // Require SELECT (or WITH ... SELECT). We also block common write/pragma keywords to
+    // prevent bypasses like `WITH ... UPDATE ... RETURNING ...`.
+    if (!/^(select|with)\b/i.test(withoutTrailingSemicolons)) {
+      throw new Error("Only SELECT queries are allowed.");
+    }
+
+    const scrubbed = withoutTrailingSemicolons
+      .replace(/'(?:''|[^'])*'/g, "''")
+      .replace(/"(?:""|[^"])*"/g, '""')
+      .replace(/`(?:``|[^`])*`/g, "``");
+
+    if (/\b(insert|update|delete|drop|alter|create|attach|detach|pragma|reindex|vacuum|replace)\b/i.test(scrubbed)) {
       throw new Error("Only SELECT queries are allowed.");
     }
 
     const db = this.getDatabase();
     try {
-      return db.prepare(query).all() as Record<string, unknown>[];
+      const stmt = db.prepare(withoutTrailingSemicolons);
+      if (!stmt.reader) {
+        throw new Error("Only SELECT queries are allowed.");
+      }
+      return stmt.all() as Record<string, unknown>[];
     } finally {
       db.close();
     }
