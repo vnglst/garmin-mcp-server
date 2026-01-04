@@ -84,6 +84,88 @@ After restarting, you can ask Claude:
 - **AI Analysis** - Let Claude analyze your running trends and performance
 - **Privacy-First** - All data stays on your machine
 
+## Self-Hosting with Docker
+
+Deploy your own instance using Docker for use with Claude, ChatGPT, or any MCP-compatible client.
+
+### Quick Start with Docker Compose
+
+1. Create a directory and download the compose file:
+
+```bash
+mkdir garmin-mcp && cd garmin-mcp
+curl -O https://raw.githubusercontent.com/vnglst/garmin-mcp-server/main/docker-compose.yml
+```
+
+2. Create a `.env` file:
+
+```bash
+GARMIN_USERNAME=your-email@example.com
+GARMIN_PASSWORD=your-password
+API_KEY=your-secret-api-key
+```
+
+3. Start the server:
+
+```bash
+docker compose up -d
+```
+
+The server runs at `http://localhost:3000` with:
+- MCP endpoint: `POST /mcp`
+- Health check: `GET /health`
+
+### Coolify Deployment
+
+1. Create a new service from Git repository
+2. Set the following environment variables:
+   - `GARMIN_USERNAME`: Your Garmin Connect email
+   - `GARMIN_PASSWORD`: Your Garmin Connect password
+   - `API_KEY`: Secret key for authentication
+   - `PORT`: 3000 (default)
+3. Configure health check path: `/health`
+4. Deploy
+
+### Using the Pre-built Image
+
+```bash
+docker run -d \
+  --name garmin-mcp-server \
+  -p 3000:3000 \
+  -e GARMIN_USERNAME=your-email@example.com \
+  -e GARMIN_PASSWORD=your-password \
+  -e API_KEY=your-secret-key \
+  -v garmin-data:/app/data \
+  ghcr.io/vnglst/garmin-mcp-server:latest
+```
+
+### MCP Client Configuration
+
+Configure your MCP client to connect to the HTTP endpoint:
+
+```json
+{
+  "mcpServers": {
+    "garmin": {
+      "url": "https://your-server.example.com/mcp",
+      "transport": "http",
+      "headers": {
+        "Authorization": "Bearer your-api-key"
+      }
+    }
+  }
+}
+```
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GARMIN_USERNAME` | Yes | Garmin Connect email |
+| `GARMIN_PASSWORD` | Yes | Garmin Connect password |
+| `API_KEY` | No | API key for authentication (recommended) |
+| `PORT` | No | Server port (default: 3000) |
+
 ## Available MCP Tools
 
 The server exposes three tools that Claude can use:

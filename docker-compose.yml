@@ -1,0 +1,25 @@
+services:
+  garmin-mcp-server:
+    image: ghcr.io/vnglst/garmin-mcp-server:latest
+    # Or build locally:
+    # build: .
+    container_name: garmin-mcp-server
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - GARMIN_USERNAME=${GARMIN_USERNAME}
+      - GARMIN_PASSWORD=${GARMIN_PASSWORD}
+      - API_KEY=${API_KEY}
+    volumes:
+      - garmin-data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  garmin-data:
