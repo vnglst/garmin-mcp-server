@@ -41,25 +41,29 @@ First, get the absolute path to this project:
 pwd
 ```
 
-This will output something like `/Users/yourusername/Code/ai-run-coach`.
+This will output something like `/Users/yourusername/Code/garmin-mcp-server`.
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+**macOS:** Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+**Linux:** Edit `~/.config/Claude/claude_desktop_config.json`
+
+**Windows:** Run `cd` to get the path, then edit `%APPDATA%\Claude\claude_desktop_config.json`
+
+Add this configuration (replace the path with your actual project path):
 
 ```json
 {
   "mcpServers": {
     "garmin-mcp-server": {
       "command": "npx",
-      "args": ["-y", "tsx", "/Users/yourusername/Code/ai-run-coach/src/index.ts"],
-      "cwd": "/Users/yourusername/Code/ai-run-coach"
+      "args": ["-y", "tsx", "/Users/yourusername/Code/garmin-mcp-server/src/index.ts"],
+      "cwd": "/Users/yourusername/Code/garmin-mcp-server"
     }
   }
 }
 ```
 
-Replace `/Users/yourusername/Code/ai-run-coach` with the path from the `pwd` command.
-
-For Windows, run `cd` to get the path, then edit `%APPDATA%\Claude\claude_desktop_config.json` instead.
+Replace `/Users/yourusername/Code/garmin-mcp-server` with your actual path from the `pwd` command.
 
 ### 5. Restart Claude Desktop
 
@@ -121,29 +125,6 @@ Returns a summary showing:
 - Number of new activities downloaded
 - Total activities in the database
 - Date of your latest activity
-
-## Built-in Analysis Prompts
-
-The server includes 8 pre-configured prompts to help you analyze your running data. In Claude Desktop, you can use these prompts to quickly get insights:
-
-### Training Analysis
-
-- **Analyze Recent Training Load** - Review last 7 days of training, load distribution, and recovery status
-- **Track Pace Improvements** - Analyze pace progression over 3 months
-- **Training Effect Analysis** - Balance between aerobic and anaerobic training
-
-### Performance Insights
-
-- **Personal Records** - Find your fastest times and best performances
-- **Heart Rate Zone Distribution** - Analyze time in each HR zone and training intensity
-- **Elevation & Hill Running Analysis** - Performance on hilly terrain and climbing efficiency
-
-### Regular Summaries
-
-- **Weekly Running Summary** - Complete overview of the current week's activities
-- **Running Form Analysis** - Cadence, stride length, ground contact time, and form metrics
-
-Simply select a prompt in Claude Desktop to automatically generate a comprehensive analysis using your Garmin data!
 
 ## What Data You Get
 
